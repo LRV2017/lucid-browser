@@ -14,6 +14,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(target_os = "windows")]
+use wry::{dpi::{LogicalPosition, LogicalSize}, NewWindowResponse, Rect as WebViewRect, WebView, WebViewBuilder, WebViewBuilderExtWindows};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Theme { Calm, Cyberpunk }
 
@@ -88,9 +91,10 @@ impl Tab {
     }
 }
 
-enum LoadResult {
-    Success { tab_id: u64, request_generation: u64, url: String, html: String },
-    Failure { tab_id: u64, request_generation: u64, url: String, message: String },
+enum BrowserEvent {
+    NavigationStarted { tab_id: u64, url: String },
+    TitleChanged { tab_id: u64, title: String },
+    OpenNewTab { url: String },
 }
 
 struct DownloadItem {
@@ -109,8 +113,12 @@ struct LucidApp {
     next_tab_id: u64,
     next_request_generation: u64,
     address: String,
-    tx: Sender<LoadResult>,
-    rx: Receiver<LoadResult>,
+    tx: Sender<BrowserEvent>,
+    rx: Receiver<BrowserEvent>,
+    #[cfg(target_os = "windows")]
+    webviews: Vec<Option<WebView>>,
+    webview_rect: Option<egui::Rect>,
+    webview_error: Option<String>,
     status: String,
     show_library: bool,
     show_settings: bool,
@@ -157,10 +165,16 @@ impl Default for LucidApp {
         if tabs.is_empty() { tabs.push(Tab::new(1, active_workspace.clone())); }
         for (index, tab) in tabs.iter_mut().enumerate() { tab.id = index as u64 + 1; }
         let address = tabs.first().map(|tab| tab.url.clone()).unwrap_or_else(|| "lucid://home".into());
+        #[cfg(target_os = "windows")]
+        let webview_slots = (0..tabs.len()).map(|_| None).collect();
 
         Self {
             theme, tabs, active_tab: 0, next_tab_id: 100, next_request_generation: 1,
             address, tx, rx,
+            #[cfg(target_os = "windows")]
+            webviews: webview_slots,
+            webview_rect: None,
+            webview_error: None,
             status: "Your browser, in its natural state.".into(),
             show_library: false, show_settings: false, show_history: false,
             show_gx_control: false, show_mods: false, show_corner: false, show_downloads: false,
@@ -237,11 +251,12 @@ impl LucidApp {
     fn sleep_background_tabs(&mut self) {
         let active_id = self.active().id;
         let mut slept = 0usize;
-        for tab in &mut self.tabs {
-            if tab.id != active_id && !tab.pinned && tab.page.is_some() {
-                tab.page = None;
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            if tab.id != active_id && !tab.pinned {
+                if tab.page.take().is_some() { slept += 1; }
+                #[cfg(target_os = "windows")]
+                if index < self.webviews.len() && self.webviews[index].take().is_some() { slept += 1; }
                 tab.discarded = true;
-                slept += 1;
             }
         }
         self.status = format!("Memory Saver slept {slept} background tab(s)");
@@ -275,13 +290,19 @@ impl LucidApp {
         let tab = Tab::new(self.next_tab_id, self.active_workspace.clone());
         self.next_tab_id += 1;
         self.tabs.push(tab);
+        #[cfg(target_os = "windows")]
+        self.webviews.push(None);
         self.active_tab = self.tabs.len() - 1;
         self.address.clear();
         self.status = format!("New tab · {} workspace", self.active_workspace);
     }
 
     fn close_tab(&mut self, index: usize) {
-        if index < self.tabs.len() { self.tabs.remove(index); }
+        if index < self.tabs.len() {
+            self.tabs.remove(index);
+            #[cfg(target_os = "windows")]
+            if index < self.webviews.len() { self.webviews.remove(index); }
+        }
         if let Some((active_index, _)) = self.tabs.iter().enumerate().find(|(_, tab)| tab.workspace == self.active_workspace) {
             self.active_tab = active_index;
         } else {
