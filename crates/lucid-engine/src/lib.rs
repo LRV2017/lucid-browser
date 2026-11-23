@@ -1,3 +1,5 @@
+pub mod resource;
+
 //! Lucid Engine: an experimental HTML/CSS parsing and layout prototype.
 //!
 //! This crate intentionally does not embed Gecko, Blink, WebKit, CEF, WebView2,
