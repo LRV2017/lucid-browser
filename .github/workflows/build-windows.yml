@@ -1,0 +1,47 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run engine and application tests
+        run: cargo test --workspace --all-targets
+
+      - name: Build release executable
+        run: cargo build --release --package lucid-browser
+
+      - name: Prepare portable ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/lucid-browser.exe dist/lucid-browser.exe
+          Copy-Item README.md dist/README.txt
+          Compress-Archive -Path dist/* -DestinationPath Lucid-Browser-Windows-x64.zip -Force
+
+      - name: Upload Windows executable and ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lucid-Browser-Windows-x64
+          path: |
+            target/release/lucid-browser.exe
+            Lucid-Browser-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
