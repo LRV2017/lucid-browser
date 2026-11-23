@@ -170,17 +170,11 @@ pub fn create_browser(
     })
 }
 
-pub fn initialize_process(
-    main_args: &MainArgs,
-    sandbox_info: *mut u8,
-) -> Result<(), String> {
+pub fn execute_subprocess(main_args: &MainArgs, sandbox_info: *mut u8) -> Option<i32> {
     let code = cef::execute_process(
         Some(main_args),
         None::<&mut App>,
         sandbox_info,
     );
-    if code >= 0 {
-        return Err(format!("Chromium subprocess exited with code {code}."));
-    }
-    Ok(())
+    (code >= 0).then_some(code)
 }
