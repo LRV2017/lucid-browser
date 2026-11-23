@@ -20,7 +20,7 @@ This roadmap is an engineering sequence with release gates, not a delivery-date 
 - Pinboards, notes, snapshots, reader view, video pop-out and media controls.
 - Sidebar integration architecture and configurable game content feeds.
 
-## 0.0.5 — HTML and DOM correctness
+## Independent engine foundation — in progress\n- [x] Add bounded HTTP(S) resource fetching with redirects, timeouts and byte limits.\n- [x] Discover common external CSS, JavaScript, image, font-preload and media references in HTML.\n- [ ] Connect resource discovery and loading to a page/document lifecycle.\n- [ ] Parse external CSS and CSS `@import` / `url()` resources.\n- [ ] Decode and paint images and load real web fonts.\n- [ ] Add a JavaScript runtime with Lucid-owned DOM bindings and event-loop integration.\n- [ ] Add streaming media loading, audio/video decoding and playback controls.\n- [ ] Replace WebView2 only after compatibility and security gates are met.\n\n## 0.0.5 — HTML and DOM correctness
 - Token stream with source locations and deterministic error recovery.
 - HTML tree construction and malformed-markup handling against standards tests.
 - DOM identity, traversal, mutation, attributes, events and fragments.
