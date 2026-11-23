@@ -47,6 +47,7 @@ pub enum ResourceError {
     Request(reqwest::Error),
     HttpStatus(reqwest::StatusCode),
     TooLarge { limit: usize },
+    Io(std::io::Error),
 }
 
 impl std::fmt::Display for ResourceError {
@@ -57,6 +58,7 @@ impl std::fmt::Display for ResourceError {
             Self::Request(error) => write!(f, "resource request failed: {error}"),
             Self::HttpStatus(status) => write!(f, "resource server returned HTTP {status}"),
             Self::TooLarge { limit } => write!(f, "resource exceeded the {limit}-byte limit"),
+            Self::Io(error) => write!(f, "could not read resource body: {error}"),
         }
     }
 }
@@ -127,7 +129,7 @@ impl ResourceLoader {
         let final_url = response.url().clone();
         let mut bytes = Vec::new();
         response.by_ref().take(self.max_resource_bytes as u64 + 1).read_to_end(&mut bytes)
-            .map_err(|error| ResourceError::Request(reqwest::Error::from(error)))?;
+            .map_err(ResourceError::Io)?;
         if bytes.len() > self.max_resource_bytes {
             return Err(ResourceError::TooLarge { limit: self.max_resource_bytes });
         }
