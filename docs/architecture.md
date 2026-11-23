@@ -1,76 +1,94 @@
-# Lucid Engine Architecture
+# Lucid Browser Architecture
 
 ## Product boundaries
 
-Lucid has two cooperating codebases in one Cargo workspace:
+The Rust workspace contains two separate rendering paths:
 
-- `apps/lucid-browser`: native desktop application, browser chrome, theme system, tab/workspace state, address handling and network request orchestration.
-- `crates/lucid-engine`: original web document processing code. It owns its HTML parser, DOM representation, CSS subset, simple layout pass and paint-operation model.
+- `apps/lucid-browser`: native desktop application, browser chrome, theme system, tab/workspace state, profiles, address handling and downloads.
+- `crates/lucid-engine`: Lucid-owned experimental HTML parser, DOM representation, CSS subset, basic layout and paint-operation model. It currently powers `lucid://demo` only.
+- The normal live web surface is hosted by Wry and rendered by Microsoft's WebView2 Runtime, which uses the Chromium-based Microsoft Edge web platform.
 
-`eframe`/`egui` is used only to create the native desktop application UI and present Lucid Engine paint operations. No embedded web view or existing browser engine is used to render pages.
+The WebView2 integration is an explicit compatibility choice. It replaces the old top-level-HTML-only fetch-and-paint path for normal HTTP/HTTPS tabs. Lucid's hand-written renderer is not currently responsible for modern websites.
 
-## Current document pipeline
+## Live website pipeline
 
 ```text
-HTTP(S) response / local demo
+Lucid native UI (tabs / address bar / workspaces / controls)
         |
         v
-Lucid HTML tokenizer + tree builder subset
+Wry host and native child WebView
         |
         v
-Lucid DOM data model
+Microsoft Edge WebView2 Runtime (Chromium)
         |
-        +----> collect <style> raw text
-        |             |
-        |             v
-        |       CSS subset parser
-        |             |
-        +-------------+
-                      v
-             selector + style subset
-                      |
-                      v
-             simple vertical block layout
-                      |
-                      v
-                paint operations
-                      |
-                      v
-             native UI painter + link hit tests
+        +---- HTML parsing and DOM
+        +---- CSS cascade, layout and paint
+        +---- JavaScript and DOM bindings
+        +---- images, fonts, SVG, canvas and media
+        +---- subresources, iframes and networking
+        +---- cookies, storage and browser APIs
+        |
+        v
+Native website surface inside the Lucid content viewport
 ```
 
-## Current supported subset
+Those web-platform subsystems are implemented by WebView2, not by `crates/lucid-engine`. WebView2's behavior tracks its installed Evergreen Runtime and may differ from the specific Chrome version on a user's machine.
 
-### HTML
-- Element start/end tags, text nodes and basic quoted/unquoted attributes.
-- Comments and declarations skipped.
-- Common void elements.
-- A few omitted paragraph/list-item end-tag cases.
-- Minimal named entity decoding.
-- Raw-text preservation for `style` and `script` blocks; scripts are inert and never executed.
+## Tab lifecycle
 
-This is not the WHATWG HTML parsing algorithm. Complex malformed markup, foster parenting, adoption agency handling, namespaces, templates, scripting insertion modes and full error recovery are not implemented.
+Each Lucid tab can own a WebView2 child surface. The active tab's child surface is positioned inside the browser content region; inactive surfaces are hidden. Switching tabs reuses their existing view. Closing a tab drops its view. Manual Memory Saver drops hidden WebViews and causes the tab to reload when revisited. All tabs currently use the same named Lucid WebView2 profile so their cookies and site storage are shared in the conventional same-profile way.
 
-### CSS
-- Simple selectors: element, class and ID.
-- Comma-separated selector lists.
-- Small declaration set: display, color, background, font-size, font-weight, font-style, margin, padding and border-radius.
-- Basic default styles and retained anchor href values.
+Top-level navigation callbacks update the tab URL and session history. Document-title callbacks update the tab title. Requests to open new windows are routed to new Lucid tabs.
 
-Combinators, pseudo-classes/elements, variables, media queries, custom properties, calc(), full shorthand expansion, inheritance rules, cascade layers, animations and the complete CSS cascade are not implemented.
+## Independent Lucid Engine path
 
-### Layout and painting
+The local demo uses the Lucid-owned pipeline:
 
-The current layout is top-to-bottom block flow with approximate text wrapping. It emits rectangles and text. It does not implement line boxes correctly, inline formatting contexts, intrinsic sizing, flexbox, grid, floats, fragmentation, transforms, stacking contexts, text selection or a real compositor. Anchor paint operations retain href metadata so the desktop UI can hit-test and navigate basic HTTP/HTTPS links.
+```text
+HTML string
+   |
+   v
+Lucid HTML tokenizer + small tree builder
+   |
+   v
+Lucid DOM
+   |
+   +----> <style> collection
+                |
+                v
+          CSS subset parser
+                |
+                v
+          selector and style subset
+                |
+                v
+          simple vertical block layout
+                |
+                v
+          paint operations
+                |
+                v
+          egui painter and basic anchor hit tests
+```
 
-## Navigation and network guardrails
+### Supported subset
 
-Each tab carries a request generation. A navigation increments that generation, and late responses are discarded if a newer request has superseded them. HTTP response bodies are capped at 5 MiB even if the server omits or misreports Content-Length. Unsupported explicit schemes (including `file:` and `javascript:`) are not opened. This is not a security sandbox; external network requests still need a comprehensive browser security model.
+- Basic element start/end tags, text nodes and attributes.
+- Comments/declarations skipped, common void elements and limited entity decoding.
+- Raw-text preservation for `style` and `script`; scripts remain inert.
+- Simple element/class/ID selectors and a small set of CSS declarations.
+- Top-to-bottom block layout with approximate text wrapping and basic rectangle/text painting.
 
-## Process and security architecture target
+This is not the WHATWG HTML parser, a complete CSS implementation, or a JavaScript runtime.
 
-The current prototype is single-process. Browser profiles and tab-session metadata are stored locally. The UI Control Center reports the Lucid process and total system memory; it does not claim per-tab process metrics. Memory Saver drops parsed document objects from background tabs and reloads them on demand. Before untrusted-site use, the architecture must move towards isolated renderer processes and a brokered network/service layer. Site isolation, sandbox policies, GPU process boundaries, IPC validation, permission prompts, origin security, same-origin enforcement and robust crash recovery are release blockers, not optional polish.
+## Navigation and security considerations
 
-## Dependencies policy
+WebView2 handles normal page navigation and subresource loading. Lucid's existing top-level hostname list does not filter all network requests, and the former HTML-download bandwidth limiter does not control WebView2 page traffic. These must not be advertised as full request-level ad blocking or total bandwidth governance.
 
-Using a GUI toolkit, TLS implementation, font rasterizer, image decoder, or GPU abstraction does not turn Lucid into a wrapper browser. Those are infrastructure libraries. The web-platform parser, DOM, CSS style system, layout, paint model and future script bindings remain Lucid-owned. Any future dependency that performs an entire browser-engine subsystem must be reviewed and documented before adoption.
+The Windows app depends on the Microsoft Edge WebView2 Runtime. Windows 11 includes the Evergreen Runtime on most devices; production distribution should detect the runtime and guide users to Microsoft's Evergreen installer if it is missing. The portable Lucid ZIP does not bundle the Fixed Version runtime.
+
+The WebView2 Runtime supplies a mature Chromium-based web platform, but Lucid's own permission UI, safe-browsing/download controls, extension management, privacy controls, and crash recovery remain experimental. Do not claim Chrome-equivalent security or compatibility before testing and audit.
+
+## Future fully independent engine
+
+If Lucid later replaces WebView2, the independent engine must implement and pass broad HTML, CSS, DOM, JavaScript, image, media, networking, accessibility and security test suites. That is a multi-year engine program, not a UI change. WebView2 is the current practical website renderer while that research continues.
