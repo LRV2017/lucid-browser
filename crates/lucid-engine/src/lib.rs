@@ -1,11 +1,11 @@
-pub mod resource;
-
 //! Lucid Engine: an experimental HTML/CSS parsing and layout prototype.
 //!
 //! This crate intentionally does not embed Gecko, Blink, WebKit, CEF, WebView2,
 //! or another browser engine. The parser, simple cascade, block layout and paint
 //! command generation in this crate are Lucid-owned prototype implementations.
 //! It is not HTML5/CSS conformance complete and does not execute JavaScript.
+
+pub mod resource;
 
 use std::collections::BTreeMap;
 
