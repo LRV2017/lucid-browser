@@ -1,17 +1,22 @@
 # Third-party notices
 
-## Desktop shell
+Lucid's current architecture uses a native eframe/egui desktop shell and a Lucid-owned page renderer. **Wry and Microsoft Edge WebView2 are not dependencies of the current application.**
 
-Lucid uses the Rust `eframe` / `egui` ecosystem for its native application interface.
+## Desktop UI and graphics
 
-## Live website rendering
+Lucid uses the Rust `eframe` / `egui` ecosystem for its native application interface and page painting. Their upstream repositories and license files are available at https://github.com/emilk/egui.
 
-Lucid uses **Wry** as the native WebView host. Wry is distributed under MIT and Apache-2.0 licenses; see the Wry project repository and its bundled license files: https://github.com/tauri-apps/wry
+## Networking and serialization
 
-On Windows, Wry hosts **Microsoft Edge WebView2 Runtime**. WebView2 is Microsoft's Chromium-based embeddable web platform and is installed/serviced separately from Lucid. Its runtime is governed by Microsoft's applicable terms and is not bundled into the portable Lucid ZIP. Runtime distribution guidance: https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution
+- `reqwest` is used for HTTP(S) requests with rustls TLS support. See https://github.com/seanmonstar/reqwest.
+- `serde` and `serde_json` are used for profile serialization. See https://github.com/serde-rs/serde.
+
+## Image decoding
+
+The `image` crate is used for supported raster image decoding. See https://github.com/image-rs/image.
 
 ## Lucid Engine
 
-The `crates/lucid-engine` HTML/CSS prototype is Lucid-owned code. It is not used to render normal live websites.
+The HTML subset parser, CSS subset parser, resource discovery, layout primitives and paint-operation generation in `crates/lucid-engine` are Lucid-owned code.
 
-Before public releases, generate and review a complete dependency/license inventory (for example with cargo-about), include required notices, and verify licenses and redistributable runtime terms against the final packaging model.
+Before public releases, generate and review a complete dependency/license inventory (for example with cargo-about), include required notices, and verify every dependency license and redistribution condition against the final packaging model.

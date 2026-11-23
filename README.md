@@ -1,84 +1,87 @@
 # Lucid Browser
 
-A Windows desktop browser with a premium, customizable Lucid interface and a live Chromium-based website renderer.
+Lucid is a Windows desktop browser with a restrained, customizable interface and a **Lucid-owned native page-rendering pipeline**. It no longer depends on Microsoft Edge WebView2 or Wry.
 
-## How website rendering works
+## The Lucid Engine
 
-Lucid uses **Microsoft Edge WebView2** through the Rust Wry host for normal websites. WebView2 is Microsoft's embeddable Chromium-based web platform. It renders real pages with their own HTML, CSS, JavaScript, images, fonts, SVG, canvas, video, iframes, network requests, cookies and browser storage. Those web standards are implemented by the WebView2 runtime, not by Lucid's small experimental renderer.
+Normal HTTP/HTTPS pages are processed by Lucid's own code:
 
-This is a deliberate engineering trade-off: it makes ordinary websites work as actual websites instead of drawing a simplified imitation of their HTML. It also means the current live renderer is the Edge/Chromium engine, **not a fully independent Lucid engine and not the Google Chrome application itself**. Rendering and compatibility should be close to current Chromium-based Edge, but exact Chrome behavior, extensions and site compatibility still need testing.
+```text
+HTTP(S) network loader
+        |
+        v
+Lucid HTML tokenizer and document tree
+        |
+        +----> linked stylesheet loader
+        |             |
+        |             v
+        |       Lucid CSS subset parser
+        |             |
+        +----> style and layout
+                      |
+                      v
+              Lucid paint operations
+                      |
+          +-----------+-----------+
+          |                       |
+      text / shapes          raster images
+          |                       |
+          +-----------+-----------+
+                      |
+                      v
+               egui page surface
+```
 
-Lucid's original renderer remains in `crates/lucid-engine` and can be tried at `lucid://demo`. It is an independent research implementation, not yet a general-purpose web engine.
+Current implementation includes bounded HTTP(S) document/resource fetching, relative resource URL resolution, a small HTML parser, a limited CSS parser and cascade, simple vertical layout, native text/shape painting, and raster image decoding for PNG, JPEG, GIF, WebP and BMP files. Page navigation and resource loading run off the UI thread. Linked stylesheets are fetched by Lucid and passed through its CSS parser; ordinary HTML image resources can be decoded and painted as native textures.
 
-> Current development line: 0.0.4 Experimental. The WebView2 integration is being validated by the Windows CI build. Do not treat a successful compile as proof of Chrome-level compatibility or browser-grade security.
+This is a genuine independent rendering path, not an embedded browser or a screenshot of another browser. It is still an **early engine prototype**, not a standards-complete browser. Many complex websites will not render correctly yet.
 
-## Lucid features
+## Current engine limitations
 
-### Interface
-- Lucid Calm: clean graphite/lavender appearance, quick links, workspace dashboard, sidebar and restrained motion.
-- Lucid Cyberpunk: separate tactical player-HUD-inspired theme with angular panels and magenta/cyan accents.
-- Theme switching, accent packs and reduced-motion preference.
+The current renderer does not yet provide a JavaScript runtime or browser DOM bindings. Scripts remain inert. The CSS parser and layout system support only a small subset of modern CSS; flexbox, grid, robust inline layout, complex selectors, CSS variables, positioning and the full cascade are not complete. Fonts are not loaded from web pages, and there is no video/audio playback pipeline, SVG/canvas renderer, iframe support, service workers, browser storage/cookies, WebSockets, WebRTC, extension runtime or multi-process site isolation.
 
-### Browser shell
-- Native tabs and workspaces.
-- A separate live WebView2 page surface for each tab; inactive views are hidden rather than replaced with screenshots.
-- Back/forward, reload, address/search navigation and persistent session metadata.
-- `target="_blank"` and `window.open()` requests are routed into new Lucid tabs.
-- Shared Lucid WebView2 profile for site cookies and storage.
-- DevTools support in the embedded web renderer.
-- Basic in-page find using the page's browser DOM.
-- Bookmarks, browsing history, downloads, pinned tabs, Memory Saver and command palette.
+Lucid must not be described as WebView2/Chromium feature-equivalent until these subsystems exist and pass broad compatibility and security testing. The engine roadmap tracks the work in stages.
 
-### Power-user foundations
-- GX-style Control Center with Lucid-process CPU/memory and system memory summary.
-- Mod Center with themes, accent packs and motion preference.
-- Lucid Corner gaming shortcut hub.
+## Interface
 
-These are first-party foundations, not full Opera GX equivalents. CPU/memory figures are not per tab; Lucid Protect is still a small top-level navigation list, not an uBlock-style request filter engine; and Lucid Corner is not a live gaming news feed. The WebView2 extension capability is enabled, but Lucid does not yet have a complete extension-store or Firefox XPI compatibility layer.
+- Lucid Calm is the default: compact tabs, a single address/search field, restrained colors and a quiet page canvas.
+- Lucid Cyberpunk remains an optional alternate appearance.
+- Library, history, downloads, performance controls and settings are kept in a compact menu rather than occupying a permanent sidebar.
+- Keyboard shortcuts and the command palette remain available.
 
-## Windows runtime requirement
+## Browser shell
 
-Lucid's website renderer needs the **Microsoft Edge WebView2 Runtime**. It is included with Windows 11 on most systems. If Lucid reports that the runtime is missing, install Microsoft's Evergreen Runtime and relaunch Lucid:
+- Native tabs, workspaces, back/forward/reload and address/search navigation.
+- Persistent session metadata, bookmarks and browsing history.
+- Basic page text search for the current parsed document.
+- Asynchronous page loading with per-tab navigation generations.
+- A native raster-image texture cache tied to tab lifetimes.
+- Local file downloads and existing profile/settings foundations.
 
-- [WebView2 Runtime download](https://developer.microsoft.com/microsoft-edge/webview2/)
-- [Microsoft runtime deployment guidance](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)
+Some power features remain prototypes. The top-level navigation blocklist is not a full request-level ad blocker. There is no verified extension store or Firefox XPI compatibility. Download scanning, full site permissions, crash recovery, private-session isolation, accessibility coverage and a multi-process renderer are not complete.
 
-The portable ZIP does not bundle the 250+ MB Fixed Version runtime. The Evergreen Runtime is independently serviced by Microsoft.
+## Runtime requirements
 
-## Download the Windows executable without installing Rust
+Lucid does **not** require Microsoft Edge WebView2 Runtime. The Windows build is packaged by GitHub Actions; users do not need Rust, Cargo, Visual Studio or compiler tools installed locally.
+
+The portable artifact still depends on standard Windows system components and the libraries shipped with the executable. It does not require installing another browser engine.
+
+## Download the Windows executable
 
 1. Open GitHub Actions: https://github.com/LRV2017/lucid-browser/actions
 2. Select the latest successful **Build Windows** run.
 3. Download the `Lucid-Browser-Windows-x64` artifact.
 4. Extract the ZIP and launch `lucid-browser.exe`.
 
-GitHub builds Lucid on a hosted Windows machine. You do not need Rust, Cargo, Visual Studio or build tools installed locally.
+## Try the Lucid renderer
 
-## Try the original Lucid renderer
-
-Launch Lucid and enter `lucid://demo`. The demo is parsed, styled, laid out and painted by Lucid's own experimental HTML/CSS code. This is intentionally separate from normal live website browsing.
-
-## Architecture
-
-```text
-Lucid Browser (Rust / egui desktop shell)
-  ├─ tabs, workspaces, toolbar, profile, downloads
-  ├─ Wry native host
-  │    └─ Microsoft Edge WebView2 Runtime (Chromium)
-  │         └─ normal live websites
-  └─ Lucid Engine (independent research path)
-       └─ lucid://demo only for now
-```
-
-See `docs/architecture.md`, `docs/product-quality-spec.md`, `docs/design-system.md`, `docs/roadmap.md` and `STATUS.md`.
+Launch Lucid and enter `lucid://demo` to view a local page processed by Lucid's HTML, CSS, layout and painting code.
 
 ## Security and compatibility
 
-The WebView2 runtime supplies a mature Chromium-based web platform, but Lucid is still an experimental browser application. Its own permission UX, download protections, ad/tracker filtering, extension management, crash recovery, privacy controls and security configuration need more work and audit. Do not use early builds for sensitive accounts, payments or security-critical browsing.
+Lucid now fetches and parses untrusted remote content itself. It is experimental and has not had an independent security audit. It currently lacks a separate sandboxed renderer process, mature site isolation, full browser permission controls, full CSP/CORS/mixed-content enforcement and a complete browser storage/security model. Do not use early builds for sensitive accounts, payments or security-critical browsing.
 
-Lucid is **not a Google Chrome clone**. It currently relies on the Edge WebView2 runtime; Chrome-specific features and policies, DRM/Widevine behavior, Google account integration, extension-store flows and every individual website have not been verified. The independent Lucid renderer is not standards-complete.
-
-A successful compile proves only that the code builds and its tests pass. It does not establish broad compatibility, security or performance parity.
+A successful compile proves only that the project builds and tests pass. It does not prove broad site compatibility, security, performance or feature parity with mature browsers.
 
 ## Build locally (optional)
 
@@ -86,4 +89,4 @@ Install Rust and the Windows C++ build tools, then run `cargo test --workspace -
 
 ## License
 
-Lucid source is MIT. Third-party runtime and dependency terms are described in `THIRD_PARTY_NOTICES.md`.
+Lucid source is MIT. Third-party dependency notices are described in `THIRD_PARTY_NOTICES.md`.

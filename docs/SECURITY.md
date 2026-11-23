@@ -1,24 +1,27 @@
 # Lucid Security Principles
 
-Lucid will process hostile network content. Security is a foundational requirement, not a final polish task.
+Lucid parses and paints untrusted network content directly. Security is a foundational requirement, not a final polish task.
 
 ## Required protections before general browsing
 
-- Strict URL parsing and scheme allow-listing.
-- TLS certificate verification; no silent downgrade or invalid-certificate bypass.
-- Same-origin policy and origin-keyed storage.
-- Renderer sandbox with least privilege.
-- Separate network and privileged browser processes.
-- Authenticated, validated IPC messages.
+- Strict URL parsing, scheme allow-listing and safe redirect handling.
+- TLS certificate verification and safe certificate-error behavior.
+- Same-origin policy and origin-keyed cookies/storage.
+- Sandboxed renderer with least privilege and process separation.
+- Authenticated, validated IPC messages between browser and renderer.
 - Per-site permission prompts for camera, microphone, location, notifications and clipboard.
-- Safe download handling and executable warnings.
-- Content Security Policy processing and secure context rules.
-- Memory-safe parsing and bounded resource consumption.
-- Fuzzing, dependency auditing and security response process.
+- Safe download handling, file-type inspection and executable warnings.
+- Content Security Policy, CORS, mixed-content and secure-context enforcement.
+- Memory-safe parsers and bounded resource consumption.
+- Fuzzing, dependency auditing, crash handling and a security response process.
 
 ## Current prototype limitations
 
-Normal HTTP/HTTPS tabs are rendered by the embedded WebView2 runtime. Lucid's independent engine now has an initial bounded HTTP(S) resource-loader module that can resolve and fetch referenced resources, but it is not yet connected to the visible page pipeline. The independent engine still does not execute page JavaScript, decode images/fonts/video, or provide a secure browsing environment. WebView2's platform security does not replace a security review of Lucid's own navigation, permissions, downloads, profile handling and process boundaries. Do not use experimental builds for sensitive browsing.
+Lucid no longer delegates page rendering to WebView2. Its own renderer currently fetches HTTP/HTTPS documents and selected resources, parses a limited HTML subset, applies a small CSS subset, decodes supported raster images and paints native egui operations.
+
+The renderer currently runs in the browser application process. It has no production-grade renderer sandbox, site isolation, full origin policy, cookie/storage security model, JavaScript execution security model, mature permission manager or independent security audit. The bounded resource loader is not a substitute for complete hostile-input protections.
+
+Do not use experimental Lucid builds for sensitive browsing, payments or security-critical accounts.
 
 ## Security reporting
 
