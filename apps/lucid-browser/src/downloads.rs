@@ -99,7 +99,7 @@ fn unique_path(directory: &Path, filename: &str) -> PathBuf {
         let candidate = directory.join(format!("{stem} ({index}).{extension}"));
         if !candidate.exists() { return candidate; }
     }
-    directory.join(format!("download-{id_placeholder()}.bin"))
+    directory.join(format!("download-{}.bin", id_placeholder()))
 }
 
 fn id_placeholder() -> u64 {
