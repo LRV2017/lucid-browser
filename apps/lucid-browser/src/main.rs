@@ -1,4 +1,13 @@
+mod downloads;
+mod performance;
+mod persistence;
+mod protection;
+
 use eframe::egui::{self, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, ScrollArea, Sense, Stroke, TextEdit, Vec2};
+use downloads::{DownloadUpdate, run_download};
+use performance::{PerformanceMonitor, format_bytes};
+use persistence::{BrowserProfile, SavedTab};
+use std::time::Instant;
 use lucid_engine::{Document, PaintOp, Stylesheet, collect_styles, document_title, layout_document, parse_html};
 use std::io::Read;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -69,17 +78,28 @@ struct Tab {
     history_index: usize,
     request_generation: u64,
     loading: bool,
+    pinned: bool,
+    discarded: bool,
 }
 
 impl Tab {
     fn new(id: u64, workspace: String) -> Self {
-        Self { id, workspace, title: "New tab".into(), url: "lucid://home".into(), page: None, error: None, history: vec!["lucid://home".into()], history_index: 0, request_generation: 0, loading: false }
+        Self { id, workspace, title: "New tab".into(), url: "lucid://home".into(), page: None, error: None, history: vec!["lucid://home".into()], history_index: 0, request_generation: 0, loading: false, pinned: false, discarded: false }
     }
 }
 
 enum LoadResult {
     Success { tab_id: u64, request_generation: u64, url: String, html: String },
     Failure { tab_id: u64, request_generation: u64, url: String, message: String },
+}
+
+struct DownloadItem {
+    id: u64,
+    url: String,
+    received: u64,
+    total: Option<u64>,
+    status: String,
+    saved_path: Option<String>,
 }
 
 struct LucidApp {
@@ -94,36 +114,159 @@ struct LucidApp {
     status: String,
     show_library: bool,
     show_settings: bool,
+    show_history: bool,
+    show_gx_control: bool,
+    show_mods: bool,
+    show_corner: bool,
+    show_downloads: bool,
     show_command_palette: bool,
     command_query: String,
     active_workspace: String,
+    workspace_name_input: String,
     bookmarks_bar: bool,
+    profile: BrowserProfile,
+    performance: PerformanceMonitor,
+    session_restore_started: bool,
+    last_persist: Instant,
+    download_input: String,
+    download_tx: Sender<DownloadUpdate>,
+    download_rx: Receiver<DownloadUpdate>,
+    downloads: Vec<DownloadItem>,
+    next_download_id: u64,
 }
+
+impl Default for LucidApp}
 
 impl Default for LucidApp {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel();
+        let (download_tx, download_rx) = mpsc::channel();
+        let profile = BrowserProfile::load();
+        let theme = if profile.theme.eq_ignore_ascii_case("cyberpunk") { Theme::Cyberpunk } else { Theme::Calm };
+        let active_workspace = profile.active_workspace.clone();
+        let mut tabs: Vec<Tab> = profile.session_tabs.iter().map(|saved| {
+            let mut tab = Tab::new(0, saved.workspace.clone());
+            tab.title = saved.title.clone();
+            tab.url = saved.url.clone();
+            tab.pinned = saved.pinned;
+            tab.history = if saved.history.is_empty() { vec![saved.url.clone()] } else { saved.history.clone() };
+            tab.history_index = saved.history_index.min(tab.history.len().saturating_sub(1));
+            tab
+        }).collect();
+        if tabs.is_empty() { tabs.push(Tab::new(1, active_workspace.clone())); }
+        for (index, tab) in tabs.iter_mut().enumerate() { tab.id = index as u64 + 1; }
+        let address = tabs.first().map(|tab| tab.url.clone()).unwrap_or_else(|| "lucid://home".into());
+
         Self {
-            theme: Theme::Calm,
-            tabs: vec![Tab::new(1, "Personal".into())],
-            active_tab: 0,
-            next_tab_id: 2,
-            next_request_generation: 1,
-            address: String::new(),
-            tx, rx,
+            theme, tabs, active_tab: 0, next_tab_id: 100, next_request_generation: 1,
+            address, tx, rx,
             status: "Your browser, in its natural state.".into(),
-            show_library: false,
-            show_settings: false,
-            show_command_palette: false,
-            command_query: String::new(),
-            active_workspace: "Personal".into(),
-            bookmarks_bar: false,
+            show_library: false, show_settings: false, show_history: false,
+            show_gx_control: false, show_mods: false, show_corner: false, show_downloads: false,
+            show_command_palette: false, command_query: String::new(),
+            active_workspace, workspace_name_input: String::new(),
+            bookmarks_bar: profile.bookmarks_bar, profile,
+            performance: PerformanceMonitor::new(),
+            session_restore_started: false, last_persist: Instant::now() - Duration::from_secs(5),
+            download_input: String::new(), download_tx, download_rx, downloads: Vec::new(), next_download_id: 1,
         }
     }
 }
 
-impl LucidApp {
+impl LucidAppimpl LucidApp {
     fn active(&self) -> &Tab { &self.tabs[self.active_tab] }
+
+    fn close_panels(&mut self) {
+        self.show_library = false;
+        self.show_settings = false;
+        self.show_history = false;
+        self.show_gx_control = false;
+        self.show_mods = false;
+        self.show_corner = false;
+        self.show_downloads = false;
+    }
+
+    fn open_panel(&mut self, panel: &str) {
+        self.close_panels();
+        match panel {
+            "library" => self.show_library = true,
+            "history" => self.show_history = true,
+            "control" => self.show_gx_control = true,
+            "mods" => self.show_mods = true,
+            "corner" => self.show_corner = true,
+            "downloads" => self.show_downloads = true,
+            "settings" => self.show_settings = true,
+            _ => {}
+        }
+    }
+
+    fn persist_profile(&mut self) {
+        self.profile.theme = if self.theme == Theme::Calm { "calm" } else { "cyberpunk" }.into();
+        self.profile.active_workspace = self.active_workspace.clone();
+        self.profile.bookmarks_bar = self.bookmarks_bar;
+        self.profile.session_tabs = self.tabs.iter().map(|tab| SavedTab {
+            title: tab.title.clone(),
+            url: tab.url.clone(),
+            workspace: tab.workspace.clone(),
+            pinned: tab.pinned,
+            history: tab.history.clone(),
+            history_index: tab.history_index,
+        }).collect();
+        self.profile.session_tabs.truncate(30);
+        let _ = self.profile.save();
+        self.last_persist = Instant::now();
+    }
+
+    fn persist_if_due(&mut self) {
+        if self.last_persist.elapsed() >= Duration::from_secs(3) {
+            self.persist_profile();
+        }
+    }
+
+    fn toggle_current_bookmark(&mut self) {
+        let tab = self.active();
+        if tab.url == "lucid://home" || tab.url == "lucid://demo" { return; }
+        let title = tab.title.clone();
+        let url = tab.url.clone();
+        self.profile.toggle_bookmark(title, url.clone());
+        self.status = if self.profile.is_bookmarked(&url) { "Added to Lucid Library".into() } else { "Removed from Lucid Library".into() };
+    }
+
+    fn sleep_background_tabs(&mut self) {
+        let active_id = self.active().id;
+        let mut slept = 0usize;
+        for tab in &mut self.tabs {
+            if tab.id != active_id && !tab.pinned && tab.page.is_some() {
+                tab.page = None;
+                tab.discarded = true;
+                slept += 1;
+            }
+        }
+        self.status = format!("Memory Saver slept {slept} background tab(s)");
+    }
+
+    fn poll_downloads(&mut self) {
+        while let Ok(update) = self.download_rx.try_recv() {
+            match update {
+                DownloadUpdate::Progress { id, received, total } => {
+                    if let Some(item) = self.downloads.iter_mut().find(|item| item.id == id) {
+                        item.received = received; item.total = total; item.status = "Downloading".into();
+                    }
+                }
+                DownloadUpdate::Completed { id, path, bytes } => {
+                    if let Some(item) = self.downloads.iter_mut().find(|item| item.id == id) {
+                        item.received = bytes; item.total = Some(bytes); item.status = "Complete".into();
+                        item.saved_path = Some(path.display().to_string());
+                    }
+                }
+                DownloadUpdate::Failed { id, message } => {
+                    if let Some(item) = self.downloads.iter_mut().find(|item| item.id == id) {
+                        item.status = format!("Failed: {message}");
+                    }
+                }
+            }
+        }
+    }
     fn active_mut(&mut self) -> &mut Tab { &mut self.tabs[self.active_tab] }
 
     fn new_tab(&mut self) {
@@ -180,16 +323,17 @@ impl LucidApp {
             }
         }
         self.address = url.clone();
-        self.show_library = false;
-        self.show_settings = false;
+        self.close_panels();
         if url == "lucid://home" {
             self.status = "Ready".into();
             return;
         }
         self.status = format!("Connecting to {url}");
         let tx = self.tx.clone();
+        let protection_enabled = self.profile.navigation_protection;
+        let network_limit_kib = self.profile.navigation_limit_kib;
         thread::spawn(move || {
-            let fetched = fetch_document(&url);
+            let fetched = fetch_document(&url, protection_enabled, network_limit_kib);
             let event = match fetched {
                 Ok(html) => LoadResult::Success { tab_id, request_generation, url, html },
                 Err(message) => LoadResult::Failure { tab_id, request_generation, url, message },
@@ -213,6 +357,8 @@ impl LucidApp {
                     tab.page = Some(LoadedPage { url, title, document, stylesheet });
                     tab.error = None;
                     tab.loading = false;
+                    tab.discarded = false;
+                    self.profile.add_history(title.clone(), url.clone());
                     if self.tabs.get(self.active_tab).is_some_and(|active| active.id == tab_id) {
                         self.status = "Loaded with Lucid Engine · JavaScript not yet supported".into();
                     }
@@ -237,9 +383,16 @@ impl LucidApp {
         match command {
             "New tab" => self.new_tab(),
             "Toggle theme" => self.theme = if self.theme == Theme::Calm { Theme::Cyberpunk } else { Theme::Calm },
-            "Open library" => self.show_library = !self.show_library,
-            "Settings" => self.show_settings = true,
+            "Open library" => self.open_panel("library"),
+            "History" => self.open_panel("history"),
+            "GX Control" => self.open_panel("control"),
+            "Mods" => self.open_panel("mods"),
+            "GX Corner" => self.open_panel("corner"),
+            "Downloads" => self.open_panel("downloads"),
+            "Settings" => self.open_panel("settings"),
             "Home" => self.navigate("lucid://home", ctx, true),
+            "Bookmark current page" => self.toggle_current_bookmark(),
+            "Sleep background tabs" => self.sleep_background_tabs(),
             _ => {}
         }
         self.show_command_palette = false;
@@ -250,7 +403,7 @@ impl LucidApp {
         ui.horizontal(|ui| {
             ui.label(RichText::new("L").size(23.0).strong().color(palette.accent));
             ui.label(RichText::new("lucid").size(21.0).strong().color(palette.text));
-            ui.label(RichText::new("ENGINE 0.0.2").size(9.0).color(palette.muted).monospace());
+            ui.label(RichText::new("ENGINE 0.0.3").size(9.0).color(palette.muted).monospace());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let theme_label = if self.theme == Theme::Calm { "Cyberpunk" } else { "Calm" };
                 if ui.add(egui::Button::new(RichText::new(theme_label).color(palette.text)).fill(palette.surface_raised).stroke(Stroke::new(1.0, palette.border)).corner_radius(10)).clicked() {
@@ -266,17 +419,49 @@ impl LucidApp {
     fn draw_tabs(&mut self, ui: &mut egui::Ui, palette: Palette) {
         ui.horizontal(|ui| {
             let mut close_index = None;
-            for (index, tab) in self.tabs.iter().enumerate().filter(|(_, tab)| tab.workspace == self.active_workspace) {
+            let mut set_pin: Option<(usize, bool)> = None;
+            let mut restore_url = None;
+            let mut indices: Vec<usize> = self.tabs.iter().enumerate()
+                .filter(|(_, tab)| tab.workspace == self.active_workspace)
+                .map(|(index, _)| index).collect();
+            indices.sort_by_key(|index| !self.tabs[*index].pinned);
+
+            for index in indices {
+                let tab = &self.tabs[index];
                 let selected = index == self.active_tab;
                 let fill = if selected { palette.surface_raised } else { palette.background };
-                let title = if tab.title.chars().count() > 18 { format!("{}…", tab.title.chars().take(17).collect::<String>()) } else { tab.title.clone() };
-                let radius = if self.theme == Theme::Calm { 9 } else { 2 };
-                let button = egui::Button::new(RichText::new(title).size(12.0).color(if selected { palette.text } else { palette.muted })).fill(fill).stroke(Stroke::new(if selected { 1.0 } else { 0.0 }, palette.border)).corner_radius(radius);
-                if ui.add(button).clicked() { self.active_tab = index; self.address = self.tabs[index].url.clone(); }
-                if ui.add(egui::Button::new(RichText::new("×").color(palette.muted).size(12.0)).fill(fill).corner_radius(9)).clicked() { close_index = Some(index); }
+                let label = format!("{}{}", if tab.pinned { "◆ " } else { "" }, tab.title.chars().take(18).collect::<String>());
+                let button = egui::Button::new(RichText::new(label).size(12.0).color(if selected { palette.text } else { palette.muted }))
+                    .fill(fill).stroke(Stroke::new(if selected { 1.0 } else { 0.0 }, palette.border))
+                    .corner_radius(if self.theme == Theme::Calm { 9 } else { 2 });
+                let response = ui.add(button);
+                if response.clicked() {
+                    self.active_tab = index;
+                    self.address = self.tabs[index].url.clone();
+                    if self.tabs[index].page.is_none() && self.tabs[index].url != "lucid://home" {
+                        restore_url = Some(self.tabs[index].url.clone());
+                    }
+                }
+                response.context_menu(|ui| {
+                    if ui.button(if tab.pinned { "Unpin tab" } else { "Pin tab" }).clicked() {
+                        set_pin = Some((index, !tab.pinned));
+                        ui.close_menu();
+                    }
+                    if ui.button("Close tab").clicked() {
+                        close_index = Some(index);
+                        ui.close_menu();
+                    }
+                });
+                if ui.add(egui::Button::new(RichText::new("×").color(palette.muted).size(12.0)).fill(fill).corner_radius(9)).clicked() {
+                    close_index = Some(index);
+                }
             }
+            if let Some((index, pinned)) = set_pin { self.tabs[index].pinned = pinned; }
             if let Some(index) = close_index { self.close_tab(index); }
-            if ui.add(egui::Button::new(RichText::new("＋").size(18.0).color(palette.accent)).fill(palette.surface).corner_radius(9)).clicked() { self.new_tab(); }
+            if let Some(url) = restore_url { self.navigate(&url, ui.ctx().clone(), false); }
+            if ui.add(egui::Button::new(RichText::new("＋").size(18.0).color(palette.accent)).fill(palette.surface).corner_radius(9)).clicked() {
+                self.new_tab();
+            }
         });
     }
 
@@ -300,10 +485,17 @@ impl LucidApp {
                 let target = self.active().url.clone();
                 self.navigate(&target, ctx.clone(), false);
             }
-            let address = ui.add_sized([ui.available_width() - 128.0, 34.0], TextEdit::singleline(&mut self.address).hint_text("Search or enter a website address…").desired_width(f32::INFINITY).margin(Vec2::new(12.0, 7.0)));
+            let address = ui.add_sized([ui.available_width() - 128.0, 34.0], TextEdit::singleline(&mut self.address).id(egui::Id::new("lucid-address-bar")).hint_text("Search or enter a website address…").desired_width(f32::INFINITY).margin(Vec2::new(12.0, 7.0)));
             if address.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) { self.navigate(&self.address.clone(), ctx.clone(), true); }
             if ui.add(egui::Button::new(RichText::new("Go").color(palette.text)).fill(palette.accent_alt).corner_radius(9)).clicked() { self.navigate(&self.address.clone(), ctx.clone(), true); }
-            if ui.add(egui::Button::new("◇").fill(palette.surface).corner_radius(9)).clicked() { self.show_library = !self.show_library; }
+            let bookmarked = self.profile.is_bookmarked(&self.active().url);
+            if ui.add(egui::Button::new(RichText::new(if bookmarked { "★" } else { "☆" }).color(palette.accent)).fill(palette.surface).corner_radius(9))
+                .on_hover_text("Bookmark this page").clicked() {
+                self.toggle_current_bookmark();
+            }
+            if ui.add(egui::Button::new("◇").fill(palette.surface).corner_radius(9)).on_hover_text("Open Library").clicked() {
+                self.open_panel("library");
+            }
         });
     }
 
@@ -323,24 +515,32 @@ impl LucidApp {
             ui.add_space(15.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("WORKSPACE").size(10.0).color(palette.muted).strong());
-                for workspace in ["Personal", "Gaming", "School", "Research"] {
+                for workspace in self.profile.workspaces.clone() {
                     let selected = self.active_workspace == workspace;
                     if ui.add(egui::Button::new(RichText::new(workspace).size(11.0).color(if selected { palette.text } else { palette.muted })).fill(if selected { palette.surface_raised } else { palette.background }).stroke(Stroke::new(if selected { 1.0 } else { 0.0 }, palette.border)).corner_radius(10)).clicked() {
                         self.switch_workspace(workspace);
                     }
                 }
             });
+            ui.add_space(5.0);
+            ui.add_sized([140.0, 26.0], TextEdit::singleline(&mut self.workspace_name_input).hint_text("New workspace"));
+            if ui.small_button("＋").clicked() {
+                let name = self.workspace_name_input.trim().to_owned();
+                if !name.is_empty() && !self.profile.workspaces.iter().any(|workspace| workspace.eq_ignore_ascii_case(&name)) {
+                    self.profile.workspaces.push(name.clone());
+                    self.switch_workspace(&name);
+                    self.workspace_name_input.clear();
+                }
+            }
         });
         ui.add_space(34.0);
         ui.horizontal(|ui| { ui.label(RichText::new("QUICK ACCESS").size(10.0).strong().color(palette.muted)); ui.add_space(5.0); ui.label(RichText::new("Your favorite places").size(11.0).color(palette.muted)); });
         ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
-            for (label, sub, url, glyph) in [
-                ("YouTube", "Video", "https://www.youtube.com", "▶"),
-                ("GitHub", "Development", "https://github.com", "⌘"),
-                ("Reddit", "Community", "https://www.reddit.com", "r/"),
-                ("Wikipedia", "Knowledge", "https://www.wikipedia.org", "W"),
-            ] {
+            for (label, sub, url, glyph) in self.profile.quick_links.clone().into_iter().map(|link| {
+                let glyph = link.label.chars().next().unwrap_or('•').to_string();
+                (link.label, link.subtitle, link.url, glyph)
+            }) {
                 let card = Frame::new().fill(palette.surface).stroke(Stroke::new(1.0, palette.border)).corner_radius(14).inner_margin(Margin::same(15));
                 card.show(ui, |ui| {
                     ui.set_min_width(122.0);
@@ -359,8 +559,8 @@ impl LucidApp {
         ui.columns(3, |columns| {
             let workspace_tabs = self.tabs.iter().filter(|tab| tab.workspace == self.active_workspace).count();
             stat_card(&mut columns[0], palette, "◫", "Open tabs", &workspace_tabs.to_string(), "In this workspace");
-            stat_card(&mut columns[1], palette, "◈", "Engine", "0.0.1", "Experimental renderer");
-            stat_card(&mut columns[2], palette, "◇", "Privacy", "Local-first", "No Lucid account required");
+            stat_card(&mut columns[1], palette, "◈", "Engine", "0.0.3", "Independent prototype");
+            stat_card(&mut columns[2], palette, "◇", "Protect", if self.profile.navigation_protection { "Enabled" } else { "Off" }, "Top-level URL filter");
         });
         ui.add_space(18.0);
         let info = Frame::new().fill(palette.surface).stroke(Stroke::new(1.0, palette.border)).corner_radius(12).inner_margin(Margin::same(13));
@@ -429,8 +629,8 @@ impl LucidApp {
         ui.add_space(15.0);
         ui.horizontal(|ui| {
             if ui.add(egui::Button::new(RichText::new("RUN ENGINE DEMO").monospace().color(palette.text)).fill(palette.surface_raised).stroke(Stroke::new(1.0, palette.accent)).corner_radius(3)).clicked() { self.navigate("lucid://demo", ctx.clone(), true); }
-            if ui.add(egui::Button::new(RichText::new("OPEN LIBRARY").monospace().color(palette.text)).fill(palette.surface).stroke(Stroke::new(1.0, palette.border)).corner_radius(3)).clicked() { self.show_library = true; }
-            if ui.add(egui::Button::new(RichText::new("SYSTEM CONFIG").monospace().color(palette.text)).fill(palette.surface).stroke(Stroke::new(1.0, palette.border)).corner_radius(3)).clicked() { self.show_settings = true; }
+            if ui.add(egui::Button::new(RichText::new("OPEN LIBRARY").monospace().color(palette.text)).fill(palette.surface).stroke(Stroke::new(1.0, palette.border)).corner_radius(3)).clicked() { self.open_panel("library"); }
+            if ui.add(egui::Button::new(RichText::new("SYSTEM CONFIG").monospace().color(palette.text)).fill(palette.surface).stroke(Stroke::new(1.0, palette.border)).corner_radius(3)).clicked() { self.open_panel("settings"); }
         });
     }
 
@@ -454,7 +654,22 @@ impl LucidApp {
             return;
         }
         let ctx = ui.ctx().clone();
-        let Some(page) = self.active().page.clone() else { self.draw_home(ui, palette, ctx); return; };
+        let Some(page) = self.active().page.clone() else {
+            if self.active().url != "lucid://home" {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(70.0);
+                    ui.label(RichText::new("This tab is sleeping").size(23.0).strong().color(palette.text));
+                    ui.label(RichText::new("Lucid released this page's document memory. Restore it when needed.").color(palette.muted));
+                    if ui.button("Restore tab").clicked() {
+                        let url = self.active().url.clone();
+                        self.navigate(&url, ctx.clone(), false);
+                    }
+                });
+            } else {
+                self.draw_home(ui, palette, ctx);
+            }
+            return;
+        };
         ui.horizontal(|ui| {
             ui.label(RichText::new(&page.title).strong().color(palette.text));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -502,37 +717,220 @@ impl LucidApp {
     }
 
     fn draw_library(&mut self, ui: &mut egui::Ui, palette: Palette, ctx: egui::Context) {
-        ui.label(RichText::new("Your library").size(23.0).strong().color(palette.text));
-        ui.label(RichText::new("Saved places, kept simple.").color(palette.muted));
-        ui.add_space(15.0);
-        for (name, url) in [("GitHub", "https://github.com"), ("Wikipedia", "https://wikipedia.org"), ("Rust documentation", "https://doc.rust-lang.org") ] {
-            if ui.add(egui::Button::new(RichText::new(format!("◇   {name}")).color(palette.text)).fill(palette.surface).corner_radius(10)).clicked() { self.navigate(url, ctx.clone(), true); }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Your Library").size(24.0).strong().color(palette.text));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button("Bookmark current page").clicked() { self.toggle_current_bookmark(); }
+            });
+        });
+        ui.label(RichText::new("Saved places, kept in your Lucid profile.").color(palette.muted));
+        ui.add_space(14.0);
+        let mut open_url = None;
+        let mut remove_index = None;
+        for (index, bookmark) in self.profile.bookmarks.iter().enumerate() {
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new(&bookmark.title).strong().color(palette.text)).clicked() { open_url = Some(bookmark.url.clone()); }
+                ui.label(RichText::new(&bookmark.url).size(10.0).color(palette.muted));
+                if ui.small_button("Remove").clicked() { remove_index = Some(index); }
+            });
+            ui.separator();
+        }
+        if self.profile.bookmarks.is_empty() {
+            ui.label(RichText::new("No bookmarks yet. Use the star beside the address bar to save a page.").color(palette.muted));
+        }
+        if let Some(index) = remove_index { self.profile.bookmarks.remove(index); }
+        if let Some(url) = open_url { self.navigate(&url, ctx, true); }
+    }
+
+    fn draw_history(&mut self, ui: &mut egui::Ui, palette: Palette, ctx: egui::Context) {
+        ui.label(RichText::new("Browsing History").size(24.0).strong().color(palette.text));
+        ui.label(RichText::new("Your recent visits, stored locally.").color(palette.muted));
+        ui.add_space(12.0);
+        let mut open_url = None;
+        for entry in self.profile.history.iter().rev().take(100) {
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new(&entry.title).color(palette.text)).clicked() { open_url = Some(entry.url.clone()); }
+                ui.label(RichText::new(&entry.url).size(10.0).color(palette.muted));
+            });
+            ui.separator();
+        }
+        if self.profile.history.is_empty() {
+            ui.label(RichText::new("Your visited pages will appear here.").color(palette.muted));
+        }
+        if let Some(url) = open_url { self.navigate(&url, ctx, true); }
+    }
+
+    fn draw_control_center(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        let snapshot = self.performance.snapshot();
+        ui.label(RichText::new("Lucid Control Center").size(24.0).strong().color(palette.text));
+        ui.label(RichText::new("Live measurements for the Lucid desktop process.").color(palette.muted));
+        ui.add_space(14.0);
+        ui.columns(3, |columns| {
+            stat_card(&mut columns[0], palette, "◉", "Lucid CPU", &format!("{:.1}%", snapshot.browser_cpu_percent), "Main process");
+            stat_card(&mut columns[1], palette, "▣", "Lucid memory", &format_bytes(snapshot.browser_memory_bytes), "Resident memory");
+            stat_card(&mut columns[2], palette, "▤", "System RAM", &format!("{} / {}", format_bytes(snapshot.system_memory_used_bytes), format_bytes(snapshot.system_memory_total_bytes)), "Used / total");
+        });
+        ui.add_space(16.0);
+        ui.label(RichText::new("MEMORY SAVER").strong().color(palette.text));
+        ui.checkbox(&mut self.profile.memory_saver, "Enable manual background-tab sleeping");
+        if ui.button("Sleep inactive tabs now").clicked() { self.sleep_background_tabs(); }
+        ui.label(RichText::new(format!("{} open tabs · pinned tabs are kept awake", self.tabs.len())).size(11.0).color(palette.muted));
+        ui.add_space(14.0);
+        ui.label(RichText::new("NETWORK GOVERNOR").strong().color(palette.text));
+        ui.add(egui::Slider::new(&mut self.profile.navigation_limit_kib, 0..=4096).text("Per-navigation HTML cap (KiB/s)"));
+        ui.label(RichText::new(if self.profile.navigation_limit_kib == 0 { "Unlimited" } else { "Applied separately to each top-level HTML transfer; subresources are not loaded by this prototype." }).size(11.0).color(palette.muted));
+        ui.add_space(14.0);
+        ui.label(RichText::new("LUCID PROTECT").strong().color(palette.text));
+        ui.checkbox(&mut self.profile.navigation_protection, "Block known advertising and tracking hosts on top-level navigation");
+        ui.label(RichText::new("This first-party list only filters page URLs. Full ad blocking requires resource loading, filter-list parsing and per-origin request interception.").size(11.0).color(palette.muted));
+        ui.add_space(14.0);
+        ui.label(RichText::new("ENGINE ISOLATION").strong().color(palette.text));
+        ui.label(RichText::new("Per-site CPU/RAM limits require renderer processes. Lucid currently renders in one process, so no fake per-tab limits are shown.").size(11.0).color(palette.muted));
+    }
+
+    fn draw_mods(&mut self, ui: &mut egui::Ui, palette: Palette, ctx: &egui::Context) {
+        ui.label(RichText::new("Lucid Mods").size(24.0).strong().color(palette.text));
+        ui.label(RichText::new("Customize the atmosphere without changing the engine or your open tabs.").color(palette.muted));
+        ui.add_space(14.0);
+        ui.label(RichText::new("INTERFACE MODE").strong().color(palette.text));
+        ui.horizontal(|ui| {
+            if ui.selectable_label(self.theme == Theme::Calm, "Lucid Calm").clicked() { self.theme = Theme::Calm; }
+            if ui.selectable_label(self.theme == Theme::Cyberpunk, "Lucid Cyberpunk").clicked() { self.theme = Theme::Cyberpunk; }
+        });
+        ui.add_space(12.0);
+        ui.label(RichText::new("ACCENT PACK").strong().color(palette.text));
+        ui.horizontal_wrapped(|ui| {
+            for (name, value, swatch) in [
+                ("Lavender", "lavender", Color32::from_rgb(183, 153, 236)),
+                ("Violet", "violet", Color32::from_rgb(151, 105, 245)),
+                ("Cyan", "cyan", Color32::from_rgb(73, 208, 216)),
+                ("Magenta", "magenta", Color32::from_rgb(239, 91, 184)),
+                ("Mint", "mint", Color32::from_rgb(112, 218, 172)),
+                ("Amber", "amber", Color32::from_rgb(241, 183, 93)),
+            ] {
+                let button = egui::Button::new(RichText::new(name).color(palette.text))
+                    .fill(swatch.gamma_multiply(0.22))
+                    .stroke(Stroke::new(if self.profile.accent == value { 2.0 } else { 1.0 }, swatch))
+                    .corner_radius(10);
+                if ui.add(button).clicked() { self.profile.accent = value.into(); }
+            }
+        });
+        ui.add_space(12.0);
+        ui.checkbox(&mut self.profile.animations_enabled, "Enable interface motion");
+        ctx.style_mut(|style| { style.animation_time = if self.profile.animations_enabled { 0.15 } else { 0.0 }; });
+        ui.add_space(12.0);
+        ui.label(RichText::new("MOD SUPPORT STATUS").strong().color(palette.text));
+        ui.label(RichText::new("Theme presets and accent packs are active. User-installed shaders, sounds, icon packs and third-party mods need a permissioned mod runtime and are staged for later.").size(11.0).color(palette.muted));
+    }
+
+    fn draw_gx_corner(&mut self, ui: &mut egui::Ui, palette: Palette, ctx: egui::Context) {
+        ui.label(RichText::new("Lucid Corner").size(24.0).strong().color(palette.text));
+        ui.label(RichText::new("A gaming launchpad. These shortcuts open source sites; live game news and release feeds are not connected yet.").color(palette.muted));
+        ui.add_space(14.0);
+        let items = [
+            ("PC game deals", "https://store.steampowered.com/specials"),
+            ("Steam news", "https://store.steampowered.com/news"),
+            ("Epic Games Store", "https://store.epicgames.com"),
+            ("PC gaming news", "https://www.pcgamer.com"),
+            ("Release calendar", "https://www.igdb.com"),
+            ("Twitch", "https://www.twitch.tv"),
+        ];
+        let mut open_url = None;
+        ui.columns(2, |columns| {
+            for (index, (label, url)) in items.iter().enumerate() {
+                if columns[index % 2].button(RichText::new(*label).color(palette.text)).clicked() {
+                    open_url = Some((*url).to_owned());
+                }
+            }
+        });
+        if let Some(url) = open_url { self.navigate(&url, ctx, true); }
+    }
+
+    fn draw_downloads(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        ui.label(RichText::new("Downloads").size(24.0).strong().color(palette.text));
+        ui.label(RichText::new("Download a direct HTTP/HTTPS file into Downloads/Lucid. Maximum file size: 512 MiB.").color(palette.muted));
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.add_sized([ui.available_width() - 110.0, 34.0], TextEdit::singleline(&mut self.download_input).hint_text("https://example.com/file.zip"));
+            if ui.button("Download").clicked() {
+                let url = self.download_input.trim().to_owned();
+                if !url.is_empty() {
+                    let id = self.next_download_id;
+                    self.next_download_id += 1;
+                    self.downloads.push(DownloadItem { id, url: url.clone(), received: 0, total: None, status: "Queued".into(), saved_path: None });
+                    let sender = self.download_tx.clone();
+                    thread::spawn(move || run_download(id, url, sender));
+                    self.download_input.clear();
+                }
+            }
+        });
+        ui.add_space(12.0);
+        for item in &self.downloads {
+            ui.group(|ui| {
+                ui.label(RichText::new(&item.url).strong().color(palette.text));
+                if let Some(total) = item.total.filter(|total| *total > 0) {
+                    ui.add(egui::ProgressBar::new((item.received as f32 / total as f32).clamp(0.0, 1.0))
+                        .show_percentage().text(format!("{} / {}", format_bytes(item.received), format_bytes(total))));
+                } else {
+                    ui.label(RichText::new(format_bytes(item.received)).size(11.0).color(palette.muted));
+                }
+                ui.label(RichText::new(&item.status).size(11.0).color(palette.muted));
+                if let Some(path) = &item.saved_path {
+                    ui.label(RichText::new(path).size(10.0).color(palette.good));
+                }
+            });
+        }
+        if self.downloads.is_empty() {
+            ui.label(RichText::new("Your downloads will appear here.").color(palette.muted));
         }
     }
 
     fn draw_settings(&mut self, ui: &mut egui::Ui, palette: Palette) {
         ui.label(RichText::new("Settings").size(25.0).strong().color(palette.text));
-        ui.label(RichText::new("Lucid's interface preferences").color(palette.muted));
+        ui.label(RichText::new("Lucid's interface, privacy and startup preferences").color(palette.muted));
         ui.add_space(18.0);
         ui.label(RichText::new("APPEARANCE").size(10.0).strong().color(palette.muted));
         ui.horizontal(|ui| {
-            if ui.selectable_label(self.theme == Theme::Calm, RichText::new("Lucid Calm").color(palette.text)).clicked() { self.theme = Theme::Calm; }
-            if ui.selectable_label(self.theme == Theme::Cyberpunk, RichText::new("Lucid Cyberpunk").color(palette.text)).clicked() { self.theme = Theme::Cyberpunk; }
+            if ui.selectable_label(self.theme == Theme::Calm, "Lucid Calm").clicked() { self.theme = Theme::Calm; }
+            if ui.selectable_label(self.theme == Theme::Cyberpunk, "Lucid Cyberpunk").clicked() { self.theme = Theme::Cyberpunk; }
         });
-        ui.add_space(12.0);
         ui.checkbox(&mut self.bookmarks_bar, "Show bookmarks bar");
-        ui.add_space(18.0);
+        ui.checkbox(&mut self.profile.memory_saver, "Enable manual background-tab sleeping");
+        ui.checkbox(&mut self.profile.navigation_protection, "Enable Lucid Protect navigation filter");
+        ui.checkbox(&mut self.profile.animations_enabled, "Enable interface animations");
+        ui.add_space(16.0);
         ui.label(RichText::new("ENGINE STATUS").size(10.0).strong().color(palette.muted));
-        ui.label(RichText::new("Lucid Engine 0.0.1 · Experimental").color(palette.text));
-        ui.label(RichText::new("HTML subset parser · Basic CSS cascade · Block layout · Paint list").size(11.0).color(palette.muted));
-        ui.label(RichText::new("Not yet supported: JavaScript, full HTML5 parsing, modern CSS layout, site isolation, extension APIs.").size(11.0).color(palette.muted));
+        ui.label(RichText::new("Lucid Engine 0.0.3 · Experimental").color(palette.text));
+        ui.label(RichText::new("Original HTML subset parser · CSS subset · block layout · paint operations").size(11.0).color(palette.muted));
+        ui.label(RichText::new("Not yet supported: JavaScript, standards-complete HTML/CSS, images, media, site isolation, extensions and full subresource loading.").size(11.0).color(palette.muted));
+        ui.add_space(12.0);
+        if ui.button("Save settings now").clicked() { self.persist_profile(); }
     }
 }
+
+impl eframe::App}
 
 impl eframe::App for LucidApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_loads();
-        let palette = self.theme.palette();
+        self.poll_downloads();
+        if !self.session_restore_started {
+            self.session_restore_started = true;
+            if self.active().url != "lucid://home" {
+                let url = self.active().url.clone();
+                self.navigate(&url, ui.ctx().clone(), false);
+            }
+        }
+        self.persist_if_due();
+        let mut palette = self.theme.palette();
+        palette.accent = match self.profile.accent.as_str() {
+            "violet" => Color32::from_rgb(151, 105, 245),
+            "cyan" => Color32::from_rgb(73, 208, 216),
+            "magenta" => Color32::from_rgb(239, 91, 184),
+            "mint" => Color32::from_rgb(112, 218, 172),
+            "amber" => Color32::from_rgb(241, 183, 93),
+            _ => if self.theme == Theme::Calm { Color32::from_rgb(183, 153, 236) } else { Color32::from_rgb(255, 65, 119) },
+        };
         let ctx = ui.ctx().clone();
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = palette.background;
@@ -547,6 +945,7 @@ impl eframe::App for LucidApp {
         visuals.widgets.active.bg_fill = palette.accent_alt;
         visuals.widgets.active.fg_stroke.color = palette.text;
         ctx.set_visuals(visuals);
+        ctx.style_mut(|style| { style.animation_time = if self.profile.animations_enabled { 0.15 } else { 0.0 }; });
 
         ui.set_min_size(ui.available_size());
         ui.vertical(|ui| {
@@ -578,31 +977,73 @@ impl eframe::App for LucidApp {
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if self.show_library {
-                    let frame = Frame::new().fill(palette.surface).stroke(Stroke::new(1.0, palette.border)).corner_radius(14).inner_margin(Margin::same(14));
-                    frame.show(ui, |ui| { ui.set_width(190.0); self.draw_library(ui, palette, ctx.clone()); });
-                }
+                Frame::new().fill(palette.surface).stroke(Stroke::new(1.0, palette.border))
+                    .corner_radius(12).inner_margin(Margin::same(6)).show(ui, |ui| {
+                        ui.set_width(46.0);
+                        ui.vertical_centered(|ui| {
+                            for (glyph, label, panel) in [
+                                ("⌂", "Home", "home"), ("☆", "Library", "library"), ("◷", "History", "history"),
+                                ("◉", "GX Control", "control"), ("✦", "Mods", "mods"), ("◈", "GX Corner", "corner"),
+                                ("⇩", "Downloads", "downloads"), ("⚙", "Settings", "settings"),
+                            ] {
+                                let active = match panel {
+                                    "library" => self.show_library, "history" => self.show_history,
+                                    "control" => self.show_gx_control, "mods" => self.show_mods,
+                                    "corner" => self.show_corner, "downloads" => self.show_downloads,
+                                    "settings" => self.show_settings,
+                                    _ => !self.show_library && !self.show_history && !self.show_gx_control && !self.show_mods && !self.show_corner && !self.show_downloads && !self.show_settings,
+                                };
+                                let button = egui::Button::new(RichText::new(glyph).size(20.0).color(if active { palette.accent } else { palette.muted }))
+                                    .fill(if active { palette.surface_raised } else { palette.surface }).corner_radius(10);
+                                if ui.add(button).on_hover_text(label).clicked() {
+                                    if panel == "home" {
+                                        self.close_panels();
+                                        self.navigate("lucid://home", ctx.clone(), true);
+                                    } else {
+                                        self.open_panel(panel);
+                                    }
+                                }
+                            }
+                        });
+                    });
+
                 let available = ui.available_width();
-                let frame = Frame::new().fill(palette.background).inner_margin(Margin::same(5));
-                frame.show(ui, |ui| {
+                Frame::new().fill(palette.background).inner_margin(Margin::same(8)).show(ui, |ui| {
                     ui.set_min_width(available);
                     ui.set_min_height(ui.available_height().max(500.0));
                     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                         if self.show_settings { self.draw_settings(ui, palette); }
-                        else if self.active().page.is_some() || self.active().error.is_some() || self.active().loading { self.draw_page(ui, palette); }
-                        else { self.draw_home(ui, palette, ctx.clone()); }
+                        else if self.show_gx_control { self.draw_control_center(ui, palette); }
+                        else if self.show_history { self.draw_history(ui, palette, ctx.clone()); }
+                        else if self.show_mods { self.draw_mods(ui, palette, &ctx); }
+                        else if self.show_corner { self.draw_gx_corner(ui, palette, ctx.clone()); }
+                        else if self.show_downloads { self.draw_downloads(ui, palette); }
+                        else if self.show_library { self.draw_library(ui, palette, ctx.clone()); }
+                        else if self.active().page.is_some() || self.active().error.is_some() || self.active().loading || self.active().url != "lucid://home" {
+                            self.draw_page(ui, palette);
+                        } else {
+                            self.draw_home(ui, palette, ctx.clone());
+                        }
                     });
                 });
             });
         });
 
+        if ctx.input            });
+        });
+
         if ctx.input(|i| i.key_pressed(egui::Key::K) && i.modifiers.ctrl) { self.show_command_palette = true; }
+        if ctx.input(|i| i.key_pressed(egui::Key::T) && i.modifiers.ctrl) { self.new_tab(); }
+        if ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.ctrl) { self.close_tab(self.active_tab); }
+        if ctx.input(|i| i.key_pressed(egui::Key::F12)) { self.open_panel("control"); }
         if self.show_command_palette {
             egui::Window::new("Lucid Command Palette").collapsible(false).resizable(false).anchor(Align2::CENTER_TOP, [0.0, 90.0]).show(&ctx, |ui| {
                 ui.set_width(390.0);
                 ui.add(TextEdit::singleline(&mut self.command_query).hint_text("Search commands…").desired_width(f32::INFINITY));
                 ui.separator();
-                for command in ["New tab", "Toggle theme", "Open library", "Settings", "Home"] {
+                let query = self.command_query.to_ascii_lowercase();
+                for command in ["New tab", "Toggle theme", "Open library", "History", "GX Control", "Mods", "GX Corner", "Downloads", "Settings", "Home", "Bookmark current page", "Sleep background tabs"] {
+                    if !query.is_empty() && !command.to_ascii_lowercase().contains(&query) { continue; }
                     if ui.button(command).clicked() { self.execute_command(command, ctx.clone()); }
                 }
             });
@@ -668,9 +1109,41 @@ fn resolve_link(base: &str, href: &str) -> Option<String> {
 
 const MAX_HTML_DOCUMENT_BYTES: u64 = 5 * 1024 * 1024;
 
-fn fetch_document(url: &str) -> Result<String, String> {
+struct RateLimitedReader<R> {
+    inner: R,
+    bytes_per_second: u64,
+    started: Instant,
+    bytes_read: u64,
+}
+
+impl<R: Read> RateLimitedReader<R> {
+    fn new(inner: R, kib_per_second: u32) -> Self {
+        Self {
+            inner,
+            bytes_per_second: u64::from(kib_per_second).saturating_mul(1024),
+            started: Instant::now(),
+            bytes_read: 0,
+        }
+    }
+}
+
+impl<R: Read> Read for RateLimitedReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.inner.read(buffer)?;
+        if count == 0 || self.bytes_per_second == 0 { return Ok(count); }
+        self.bytes_read = self.bytes_read.saturating_add(count as u64);
+        let target = Duration::from_secs_f64(self.bytes_read as f64 / self.bytes_per_second as f64);
+        if let Some(delay) = target.checked_sub(self.started.elapsed()) { thread::sleep(delay); }
+        Ok(count)
+    }
+}
+
+fn fetch_document(url: &str, protection_enabled: bool, network_limit_kib: u32) -> Result<String, String> {
+    if protection_enabled && protection::is_blocked_navigation(url) {
+        return Err("Blocked by Lucid Protect: destination matches the built-in navigation blocklist.".into());
+    }
     if url == "lucid://demo" {
-        return Ok(r##"<!doctype html><html><head><title>Lucid Engine Demo</title><style>
+        let html = r##"<!doctype html><html><head><title>Lucid Engine Demo</title><style>
             body { color: #282431; }
             .hero { color: #7452b0; font-size: 34px; font-weight: 700; }
             .panel { background: #f0ebf8; padding: 18px; border-radius: 14px; margin: 12px; }
@@ -682,7 +1155,8 @@ fn fetch_document(url: &str) -> Result<String, String> {
             <div class="panel"><h2>What is working?</h2><p>HTML tokenization, a small DOM tree, basic CSS selectors, simple declarations, and a top-to-bottom layout prototype.</p></div>
             <h2>What comes next?</h2><p class="note">Inline layout, flexbox, grid, proper HTML5 parsing, JavaScript, standards tests, security isolation, and many more web APIs.</p>
             <p><a href="https://www.rust-lang.org">Learn about Rust →</a></p>
-        </body></html>"##.into());
+        </body></html>"##;
+        return Ok(html.into());
     }
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("Lucid currently supports HTTP and HTTPS web addresses only. Local-file access is not enabled in this prototype.".into());
@@ -704,8 +1178,8 @@ fn fetch_document(url: &str) -> Result<String, String> {
         return Err("The HTML document is larger than Lucid's current 5 MiB prototype limit.".into());
     }
     let mut body = String::new();
-    let bytes_read = response.take(MAX_HTML_DOCUMENT_BYTES + 1)
-        .read_to_string(&mut body)
+    let limited = RateLimitedReader::new(response.take(MAX_HTML_DOCUMENT_BYTES + 1), network_limit_kib);
+    let bytes_read = limited.read_to_string(&mut body)
         .map_err(|e| format!("Could not read HTML response: {e}"))?;
     if bytes_read as u64 > MAX_HTML_DOCUMENT_BYTES {
         return Err("The HTML document exceeded Lucid's current 5 MiB prototype limit.".into());
@@ -745,8 +1219,14 @@ mod tests {
     }
 
     #[test]
+    fn navigation_protection_blocks_known_ad_hosts() {
+        assert!(protection::is_blocked_navigation("https://doubleclick.net/ads"));
+        assert!(!protection::is_blocked_navigation("https://example.com"));
+    }
+
+    #[test]
     fn demo_page_parses_through_lucid_engine() {
-        let html = fetch_document("lucid://demo").expect("demo should be local");
+        let html = fetch_document("lucid://demo", false, 0).expect("demo should be local");
         let document = parse_html(&html);
         assert_eq!(document_title(&document).as_deref(), Some("Lucid Engine Demo"));
         let styles = collect_styles(&document);
