@@ -1,7 +1,7 @@
 mod downloads;
 #[cfg(target_os = "windows")]
 #[path = "cef_host.rs"]
-mod cef_host;
+pub(crate) mod cef_host;
 mod performance;
 mod persistence;
 mod protection;
@@ -375,14 +375,11 @@ impl LucidApp {
 
     fn close_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
-            let closed_tab_id = self.tabs[index].id;
-            self.tabs.remove(index);
-            self.image_textures.retain(|(tab_id, _), _| *tab_id != closed_tab_id);
+            let closed_tab = self.tabs.remove(index);
+            self.image_textures.retain(|(tab_id, _), _| *tab_id != closed_tab.id);
             #[cfg(target_os = "windows")]
-            {
-                if let Some(browser) = self.tabs.get(index).and_then(|tab| tab.cef_browser.as_ref()) {
-                    if let Some(host) = browser.host() { host.close_browser(0); }
-                }
+            if let Some(browser) = closed_tab.cef_browser {
+                if let Some(host) = browser.host() { host.close_browser(0); }
             }
         }
         if let Some((active_index, _)) = self.tabs.iter().enumerate().find(|(_, tab)| tab.workspace == self.active_workspace) {
@@ -1451,7 +1448,8 @@ fn fetch_document(url: &str, protection_enabled: bool, network_limit_kib: u32) -
     Ok(body)
 }
 
-pub fn run_lucid(main_args: &cef::MainArgs, sandbox_info: *mut u8) -> eframe::Result {
+#[cfg(target_os = "windows")]
+pub fn run_lucid(instance: isize, sandbox_info: usize) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Lucid Browser")
@@ -1460,12 +1458,25 @@ pub fn run_lucid(main_args: &cef::MainArgs, sandbox_info: *mut u8) -> eframe::Re
         ..Default::default()
     };
     let result = eframe::run_native("Lucid Browser", options, Box::new(move |cc| {
-        LucidApp::new(cc, main_args, sandbox_info)
+        let main_args = cef::MainArgs { instance: instance as _ };
+        LucidApp::new(cc, &main_args, sandbox_info as *mut u8)
             .map(|app| Box::new(app) as Box<dyn eframe::App>)
             .map_err(|message| Box::new(std::io::Error::other(message)) as Box<dyn std::error::Error + Send + Sync>)
     }));
     cef::shutdown();
     result
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn run_lucid() -> eframe::Result {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Lucid Browser")
+            .with_inner_size([1280.0, 860.0])
+            .with_min_inner_size([860.0, 620.0]),
+        ..Default::default()
+    };
+    eframe::run_native("Lucid Browser", options, Box::new(|cc| Ok(Box::new(LucidApp::new(cc)))))
 }
 
 #[cfg(test)]
