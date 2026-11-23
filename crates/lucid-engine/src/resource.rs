@@ -12,7 +12,7 @@ use reqwest::header::CONTENT_TYPE;
 use reqwest::redirect::Policy;
 use reqwest::Url;
 
-use crate::{Document, Element, Node};
+use crate::{parse_stylesheet, Document, Element, Node, Stylesheet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
@@ -140,6 +140,81 @@ impl ResourceLoader {
             mime_type,
             bytes,
         })
+    }
+}
+
+/// Fetch and parse linked external stylesheets using Lucid's current CSS parser.
+/// Rules are appended in document order. The current parser is intentionally a
+/// small CSS subset; this does not imply full CSS specification support.
+pub fn load_document_stylesheets(
+    document: &Document,
+    base: &Url,
+    loader: &ResourceLoader,
+) -> Result<Stylesheet, ResourceError> {
+    let mut combined = Stylesheet::default();
+    for reference in discover_document_resources(document, base)
+        .into_iter()
+        .filter(|resource| resource.kind == ResourceKind::Stylesheet)
+    {
+        let fetched = loader.fetch(&reference)?;
+        let css = String::from_utf8_lossy(&fetched.bytes);
+        combined.rules.extend(parse_stylesheet(&css).rules);
+    }
+    Ok(combined)
+}
+
+/// Discover resources referenced by CSS url() and @import declarations.
+/// URL classification is extension-based until CSS MIME-aware resource loading
+/// and font-face parsing are connected to the style system.
+pub fn discover_css_resources(css: &str, base: &Url) -> Vec<ResourceReference> {
+    let mut output = Vec::new();
+    let lower = css.to_ascii_lowercase();
+    let mut cursor = 0;
+
+    while let Some(relative) = lower[cursor..].find("url(") {
+        let start = cursor + relative + 4;
+        let Some(close_relative) = css[start..].find(')') else { break };
+        let end = start + close_relative;
+        let raw = css[start..end].trim().trim_matches('"').trim_matches('\'');
+        push_css_reference(raw, base, &mut output);
+        cursor = end + 1;
+    }
+
+    let mut cursor = 0;
+    while let Some(relative) = lower[cursor..].find("@import") {
+        let start = cursor + relative + "@import".len();
+        let rest = css[start..].trim_start();
+        if !rest.to_ascii_lowercase().starts_with("url(") {
+            let raw = rest.split([';', ' ', '\\n', '\\r', '\\t'])
+                .next().unwrap_or("").trim_matches('"').trim_matches('\'');
+            push_css_reference(raw, base, &mut output);
+        }
+        cursor = start;
+    }
+
+    output
+}
+
+fn push_css_reference(raw: &str, base: &Url, output: &mut Vec<ResourceReference>) {
+    if raw.is_empty() || raw.starts_with("data:") || raw.starts_with('#') {
+        return;
+    }
+    let Ok(url) = ResourceLoader::resolve(base, raw) else { return };
+    let path = url.path().to_ascii_lowercase();
+    let kind = if [".woff2", ".woff", ".ttf", ".otf", ".eot"].iter().any(|ext| path.ends_with(ext)) {
+        ResourceKind::Font
+    } else if [".mp4", ".webm", ".m4v", ".mov"].iter().any(|ext| path.ends_with(ext)) {
+        ResourceKind::Video
+    } else if [".mp3", ".ogg", ".wav", ".m4a", ".aac"].iter().any(|ext| path.ends_with(ext)) {
+        ResourceKind::Audio
+    } else if [".css"].iter().any(|ext| path.ends_with(ext)) {
+        ResourceKind::Stylesheet
+    } else {
+        ResourceKind::Image
+    };
+    let item = ResourceReference { url, kind };
+    if !output.contains(&item) {
+        output.push(item);
     }
 }
 
@@ -276,6 +351,18 @@ mod tests {
         assert!(resources.iter().any(|r| r.kind == ResourceKind::Video && r.url.path() == "/pages/movie.mp4"));
         assert!(resources.iter().any(|r| r.kind == ResourceKind::Audio && r.url.path() == "/pages/sound.ogg"));
         assert!(resources.iter().any(|r| r.kind == ResourceKind::Track && r.url.path() == "/pages/captions.vtt"));
+    }
+
+    #[test]
+    fn discovers_font_image_and_import_urls_in_css() {
+        let base = Url::parse("https://example.com/css/site.css").unwrap();
+        let resources = discover_css_resources(
+            "@font-face { src: url('../fonts/ui.woff2'); } .hero { background: url(\"../img/hero.webp\"); } @import \"theme.css\";",
+            &base,
+        );
+        assert!(resources.iter().any(|r| r.kind == ResourceKind::Font && r.url.path() == "/fonts/ui.woff2"));
+        assert!(resources.iter().any(|r| r.kind == ResourceKind::Image && r.url.path() == "/img/hero.webp"));
+        assert!(resources.iter().any(|r| r.kind == ResourceKind::Stylesheet && r.url.path() == "/css/theme.css"));
     }
 
     #[test]
