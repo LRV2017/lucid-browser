@@ -25,6 +25,9 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Initialize MSVC compiler environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Install Chromium native build tools
         shell: pwsh
         run: |
