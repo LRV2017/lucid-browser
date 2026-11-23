@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "lucid_browser"
+crate-type = ["cdylib"]
+
 [dependencies]
 eframe = { version = "0.37.0", default-features = true }
 image = { version = "0.25.8", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
