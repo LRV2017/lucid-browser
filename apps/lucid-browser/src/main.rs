@@ -806,19 +806,6 @@ impl LucidApp {
             }
             return;
         };
-        if self.show_find {
-            let mut close_find = false;
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("FIND").strong().size(10.0).color(palette.accent));
-                let response = ui.add(TextEdit::singleline(&mut self.find_query).id(egui::Id::new("lucid-find-bar")).hint_text("Find on this page…").desired_width(260.0));
-                if self.find_focus { response.request_focus(); self.find_focus = false; }
-                let matches = count_text_matches(&page.document.children, &self.find_query);
-                ui.label(RichText::new(if self.find_query.trim().is_empty() { "Type to search".into() } else { format!("{matches} matches") }).size(11.0).color(palette.muted));
-                if ui.button("×").on_hover_text("Close find bar (Esc)").clicked() { close_find = true; }
-            });
-            if close_find { self.show_find = false; self.find_query.clear(); }
-            ui.separator();
-        }
         ui.horizontal(|ui| {
             ui.label(RichText::new(&page.title).strong().color(palette.text));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1128,6 +1115,20 @@ impl eframe::App for LucidApp {
                     });
                 });
             });
+            if self.show_find {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("FIND").size(10.0).strong().color(palette.accent));
+                    let response = ui.add_sized([260.0, 28.0], TextEdit::singleline(&mut self.find_query).hint_text("Find on this page…"));
+                    if self.find_focus { response.request_focus(); self.find_focus = false; }
+                    if response.changed() { self.find_in_page(); }
+                    if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) { self.find_in_page(); }
+                    if ui.small_button("×").clicked() {
+                        self.show_find = false;
+                        self.find_query.clear();
+                        self.find_in_page();
+                    }
+                });
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 Frame::new().fill(palette.surface).stroke(Stroke::new(1.0, palette.border))
@@ -1164,26 +1165,37 @@ impl eframe::App for LucidApp {
                 Frame::new().fill(palette.background).inner_margin(Margin::same(8)).show(ui, |ui| {
                     ui.set_min_width(available);
                     ui.set_min_height(ui.available_height().max(500.0));
-                    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        if self.show_settings { self.draw_settings(ui, palette); }
-                        else if self.show_gx_control { self.draw_control_center(ui, palette); }
-                        else if self.show_history { self.draw_history(ui, palette, ctx.clone()); }
-                        else if self.show_mods { self.draw_mods(ui, palette, &ctx); }
-                        else if self.show_corner { self.draw_gx_corner(ui, palette, ctx.clone()); }
-                        else if self.show_downloads { self.draw_downloads(ui, palette); }
-                        else if self.show_library { self.draw_library(ui, palette, ctx.clone()); }
-                        else if self.active().page.is_some() || self.active().error.is_some() || self.active().loading || self.active().url != "lucid://home" {
-                            self.draw_page(ui, palette);
-                        } else {
-                            self.draw_home(ui, palette, ctx.clone());
+                    let panels_open = self.show_settings || self.show_gx_control || self.show_history
+                        || self.show_mods || self.show_corner || self.show_downloads || self.show_library;
+                    if !panels_open && is_web_url(&self.active().url) {
+                        let rect = ui.available_rect_before_wrap();
+                        ui.allocate_rect(rect, Sense::hover());
+                        self.webview_rect = Some(rect);
+                        if let Some(error) = &self.webview_error {
+                            ui.label(RichText::new(error).color(palette.muted));
                         }
-                    });
+                    } else {
+                        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            if self.show_settings { self.draw_settings(ui, palette); }
+                            else if self.show_gx_control { self.draw_control_center(ui, palette); }
+                            else if self.show_history { self.draw_history(ui, palette, ctx.clone()); }
+                            else if self.show_mods { self.draw_mods(ui, palette, &ctx); }
+                            else if self.show_corner { self.draw_gx_corner(ui, palette, ctx.clone()); }
+                            else if self.show_downloads { self.draw_downloads(ui, palette); }
+                            else if self.show_library { self.draw_library(ui, palette, ctx.clone()); }
+                            else if self.active().page.is_some() || self.active().error.is_some() {
+                                self.draw_page(ui, palette);
+                            } else {
+                                self.draw_home(ui, palette, ctx.clone());
+                            }
+                        });
+                    }
                 });
             });
         });
 
         if ctx.input(|i| i.key_pressed(egui::Key::K) && i.modifiers.ctrl) { self.show_command_palette = true; }
-        if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) && self.active().page.is_some() { self.show_find = true; self.find_focus = true; }
+        if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) && (self.active().page.is_some() || is_web_url(&self.active().url)) { self.show_find = true; self.find_focus = true; }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.show_find { self.show_find = false; self.find_query.clear(); }
         if ctx.input(|i| i.key_pressed(egui::Key::T) && i.modifiers.ctrl) { self.new_tab(); }
         if ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.ctrl) { self.close_tab(self.active_tab); }
@@ -1200,7 +1212,13 @@ impl eframe::App for LucidApp {
                 }
             });
         }
+        #[cfg(target_os = "windows")]
+        self.sync_webviews(frame, &ctx);
     }
+}
+
+fn is_web_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
 }
 
 fn count_text_matches(nodes: &[Node], query: &str) -> usize {
