@@ -519,7 +519,7 @@ impl LucidApp {
                 ui.label(RichText::new("WORKSPACE").size(10.0).color(palette.muted).strong());
                 for workspace in self.profile.workspaces.clone() {
                     let selected = self.active_workspace == workspace;
-                    if ui.add(egui::Button::new(RichText::new(workspace).size(11.0).color(if selected { palette.text } else { palette.muted })).fill(if selected { palette.surface_raised } else { palette.background }).stroke(Stroke::new(if selected { 1.0 } else { 0.0 }, palette.border)).corner_radius(10)).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(&workspace).size(11.0).color(if selected { palette.text } else { palette.muted })).fill(if selected { palette.surface_raised } else { palette.background }).stroke(Stroke::new(if selected { 1.0 } else { 0.0 }, palette.border)).corner_radius(10)).clicked() {
                         self.switch_workspace(&workspace);
                     }
                 }
