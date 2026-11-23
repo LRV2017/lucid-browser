@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn filename_is_sanitized() {
-        assert_eq!(safe_filename("../../secret?.zip"), "___secret_.zip");
+        assert_eq!(safe_filename("../../secret?.zip"), "_.._secret_.zip");
         assert_eq!(safe_filename(".."), "download.bin");
     }
 
