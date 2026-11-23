@@ -135,8 +135,6 @@ struct LucidApp {
     next_download_id: u64,
 }
 
-impl Default for LucidApp}
-
 impl Default for LucidApp {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel();
@@ -173,7 +171,7 @@ impl Default for LucidApp {
     }
 }
 
-impl LucidAppimpl LucidApp {
+impl LucidApp {
     fn active(&self) -> &Tab { &self.tabs[self.active_tab] }
 
     fn close_panels(&mut self) {
@@ -907,8 +905,6 @@ impl LucidAppimpl LucidApp {
         if ui.button("Save settings now").clicked() { self.persist_profile(); }
     }
 }
-
-impl eframe::App}
 
 impl eframe::App for LucidApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
