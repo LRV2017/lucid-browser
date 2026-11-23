@@ -1025,9 +1025,6 @@ impl eframe::App for LucidApp {
             });
         });
 
-        if ctx.input            });
-        });
-
         if ctx.input(|i| i.key_pressed(egui::Key::K) && i.modifiers.ctrl) { self.show_command_palette = true; }
         if ctx.input(|i| i.key_pressed(egui::Key::T) && i.modifiers.ctrl) { self.new_tab(); }
         if ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.ctrl) { self.close_tab(self.active_tab); }
