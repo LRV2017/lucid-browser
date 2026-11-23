@@ -352,7 +352,7 @@ impl LucidApp {
                     let title = document_title(&document).unwrap_or_else(|| url.clone());
                     tab.title = title.clone();
                     tab.url = url.clone();
-                    tab.page = Some(LoadedPage { url, title, document, stylesheet });
+                    tab.page = Some(LoadedPage { url: url.clone(), title: title.clone(), document, stylesheet });
                     tab.error = None;
                     tab.loading = false;
                     tab.discarded = false;
@@ -443,11 +443,11 @@ impl LucidApp {
                 response.context_menu(|ui| {
                     if ui.button(if tab.pinned { "Unpin tab" } else { "Pin tab" }).clicked() {
                         set_pin = Some((index, !tab.pinned));
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Close tab").clicked() {
                         close_index = Some(index);
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
                 if ui.add(egui::Button::new(RichText::new("×").color(palette.muted).size(12.0)).fill(fill).corner_radius(9)).clicked() {
@@ -516,7 +516,7 @@ impl LucidApp {
                 for workspace in self.profile.workspaces.clone() {
                     let selected = self.active_workspace == workspace;
                     if ui.add(egui::Button::new(RichText::new(workspace).size(11.0).color(if selected { palette.text } else { palette.muted })).fill(if selected { palette.surface_raised } else { palette.background }).stroke(Stroke::new(if selected { 1.0 } else { 0.0 }, palette.border)).corner_radius(10)).clicked() {
-                        self.switch_workspace(workspace);
+                        self.switch_workspace(&workspace);
                     }
                 }
             });
@@ -545,7 +545,7 @@ impl LucidApp {
                     ui.set_min_height(60.0);
                     ui.vertical(|ui| {
                         ui.label(RichText::new(glyph).size(20.0).color(palette.accent).strong());
-                        if ui.button(RichText::new(label).color(palette.text).strong()).clicked() { self.navigate(url, ctx.clone(), true); }
+                        if ui.button(RichText::new(label).color(palette.text).strong()).clicked() { self.navigate(&url, ctx.clone(), true); }
                         ui.label(RichText::new(sub).size(10.0).color(palette.muted));
                     });
                 });
@@ -815,7 +815,7 @@ impl LucidApp {
         });
         ui.add_space(12.0);
         ui.checkbox(&mut self.profile.animations_enabled, "Enable interface motion");
-        ctx.style_mut(|style| { style.animation_time = if self.profile.animations_enabled { 0.15 } else { 0.0 }; });
+        ctx.style_mut_of(egui::Theme::Dark, |style| { style.animation_time = if self.profile.animations_enabled { 0.15 } else { 0.0 }; });
         ui.add_space(12.0);
         ui.label(RichText::new("MOD SUPPORT STATUS").strong().color(palette.text));
         ui.label(RichText::new("Theme presets and accent packs are active. User-installed shaders, sounds, icon packs and third-party mods need a permissioned mod runtime and are staged for later.").size(11.0).color(palette.muted));
@@ -941,7 +941,7 @@ impl eframe::App for LucidApp {
         visuals.widgets.active.bg_fill = palette.accent_alt;
         visuals.widgets.active.fg_stroke.color = palette.text;
         ctx.set_visuals(visuals);
-        ctx.style_mut(|style| { style.animation_time = if self.profile.animations_enabled { 0.15 } else { 0.0 }; });
+        ctx.style_mut_of(egui::Theme::Dark, |style| { style.animation_time = if self.profile.animations_enabled { 0.15 } else { 0.0 }; });
 
         ui.set_min_size(ui.available_size());
         ui.vertical(|ui| {
@@ -954,7 +954,7 @@ impl eframe::App for LucidApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("BOOKMARKS").size(9.0).color(palette.muted));
                     for (label, url) in [("GitHub", "https://github.com"), ("Wikipedia", "https://wikipedia.org"), ("Rust", "https://rust-lang.org")] {
-                        if ui.small_button(label).clicked() { self.navigate(url, ctx.clone(), true); }
+                        if ui.small_button(label).clicked() { self.navigate(&url, ctx.clone(), true); }
                     }
                 });
             }
@@ -1171,7 +1171,7 @@ fn fetch_document(url: &str, protection_enabled: bool, network_limit_kib: u32) -
         return Err("The HTML document is larger than Lucid's current 5 MiB prototype limit.".into());
     }
     let mut body = String::new();
-    let limited = RateLimitedReader::new(response.take(MAX_HTML_DOCUMENT_BYTES + 1), network_limit_kib);
+    let mut limited = RateLimitedReader::new(response.take(MAX_HTML_DOCUMENT_BYTES + 1), network_limit_kib);
     let bytes_read = limited.read_to_string(&mut body)
         .map_err(|e| format!("Could not read HTML response: {e}"))?;
     if bytes_read as u64 > MAX_HTML_DOCUMENT_BYTES {
