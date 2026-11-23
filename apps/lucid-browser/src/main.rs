@@ -1,7 +1,6 @@
 use eframe::egui::{self, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, ScrollArea, Sense, Stroke, TextEdit, Vec2};
 use lucid_engine::{Document, PaintOp, Stylesheet, collect_styles, document_title, layout_document, parse_html};
-use std::fs;
-use std::path::PathBuf;
+use std::io::Read;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -68,25 +67,30 @@ struct Tab {
     error: Option<String>,
     history: Vec<String>,
     history_index: usize,
+    request_generation: u64,
+    loading: bool,
 }
 
 impl Tab {
     fn new(id: u64, workspace: String) -> Self {
-        Self { id, workspace, title: "New tab".into(), url: "lucid://home".into(), page: None, error: None, history: vec!["lucid://home".into()], history_index: 0 }
+        Self { id, workspace, title: "New tab".into(), url: "lucid://home".into(), page: None, error: None, history: vec!["lucid://home".into()], history_index: 0, request_generation: 0, loading: false }
     }
 }
 
-enum LoadResult { Success { tab_id: u64, url: String, html: String }, Failure { tab_id: u64, url: String, message: String } }
+enum LoadResult {
+    Success { tab_id: u64, request_generation: u64, url: String, html: String },
+    Failure { tab_id: u64, request_generation: u64, url: String, message: String },
+}
 
 struct LucidApp {
     theme: Theme,
     tabs: Vec<Tab>,
     active_tab: usize,
     next_tab_id: u64,
+    next_request_generation: u64,
     address: String,
     tx: Sender<LoadResult>,
     rx: Receiver<LoadResult>,
-    loading: bool,
     status: String,
     show_library: bool,
     show_settings: bool,
@@ -104,9 +108,9 @@ impl Default for LucidApp {
             tabs: vec![Tab::new(1, "Personal".into())],
             active_tab: 0,
             next_tab_id: 2,
+            next_request_generation: 1,
             address: String::new(),
             tx, rx,
-            loading: false,
             status: "Your browser, in its natural state.".into(),
             show_library: false,
             show_settings: false,
@@ -154,16 +158,24 @@ impl LucidApp {
 
     fn navigate(&mut self, input: &str, ctx: egui::Context, push_history: bool) {
         let url = normalize_address(input);
+        let request_generation = self.next_request_generation;
+        self.next_request_generation = self.next_request_generation.wrapping_add(1).max(1);
         let tab_id = self.active().id;
         {
             let tab = self.active_mut();
+            tab.request_generation = request_generation;
+            tab.loading = url != "lucid://home";
             tab.url = url.clone();
             tab.title = if url == "lucid://home" { "New tab".into() } else { "Loading…".into() };
             tab.page = None;
             tab.error = None;
             if push_history {
-                if tab.history_index + 1 < tab.history.len() { tab.history.truncate(tab.history_index + 1); }
-                if tab.history.last() != Some(&url) { tab.history.push(url.clone()); }
+                if tab.history_index + 1 < tab.history.len() {
+                    tab.history.truncate(tab.history_index + 1);
+                }
+                if tab.history.last() != Some(&url) {
+                    tab.history.push(url.clone());
+                }
                 tab.history_index = tab.history.len().saturating_sub(1);
             }
         }
@@ -171,18 +183,16 @@ impl LucidApp {
         self.show_library = false;
         self.show_settings = false;
         if url == "lucid://home" {
-            self.loading = false;
             self.status = "Ready".into();
             return;
         }
-        self.loading = true;
         self.status = format!("Connecting to {url}");
         let tx = self.tx.clone();
         thread::spawn(move || {
             let fetched = fetch_document(&url);
             let event = match fetched {
-                Ok(html) => LoadResult::Success { tab_id, url, html },
-                Err(message) => LoadResult::Failure { tab_id, url, message },
+                Ok(html) => LoadResult::Success { tab_id, request_generation, url, html },
+                Err(message) => LoadResult::Failure { tab_id, request_generation, url, message },
             };
             let _ = tx.send(event);
             ctx.request_repaint_after(Duration::from_millis(20));
@@ -192,28 +202,32 @@ impl LucidApp {
     fn poll_loads(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
-                LoadResult::Success { tab_id, url, html } => {
+                LoadResult::Success { tab_id, request_generation, url, html } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else { continue };
+                    if tab.request_generation != request_generation { continue; }
                     let document = parse_html(&html);
                     let stylesheet = collect_styles(&document);
                     let title = document_title(&document).unwrap_or_else(|| url.clone());
-                    if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-                        tab.title = title.clone();
-                        tab.url = url.clone();
-                        tab.page = Some(LoadedPage { url, title, document, stylesheet });
-                        tab.error = None;
+                    tab.title = title.clone();
+                    tab.url = url.clone();
+                    tab.page = Some(LoadedPage { url, title, document, stylesheet });
+                    tab.error = None;
+                    tab.loading = false;
+                    if self.tabs.get(self.active_tab).is_some_and(|active| active.id == tab_id) {
+                        self.status = "Loaded with Lucid Engine · JavaScript not yet supported".into();
                     }
-                    self.loading = false;
-                    self.status = "Loaded with Lucid Engine · JavaScript not yet supported".into();
                 }
-                LoadResult::Failure { tab_id, url, message } => {
-                    if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-                        tab.title = "Page unavailable".into();
-                        tab.url = url;
-                        tab.error = Some(message.clone());
-                        tab.page = None;
+                LoadResult::Failure { tab_id, request_generation, url, message } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else { continue };
+                    if tab.request_generation != request_generation { continue; }
+                    tab.title = "Page unavailable".into();
+                    tab.url = url;
+                    tab.error = Some(message);
+                    tab.page = None;
+                    tab.loading = false;
+                    if self.tabs.get(self.active_tab).is_some_and(|active| active.id == tab_id) {
+                        self.status = "Navigation failed".into();
                     }
-                    self.loading = false;
-                    self.status = "Navigation failed".into();
                 }
             }
         }
@@ -236,7 +250,7 @@ impl LucidApp {
         ui.horizontal(|ui| {
             ui.label(RichText::new("L").size(23.0).strong().color(palette.accent));
             ui.label(RichText::new("lucid").size(21.0).strong().color(palette.text));
-            ui.label(RichText::new("ENGINE 0.0.1").size(9.0).color(palette.muted).monospace());
+            ui.label(RichText::new("ENGINE 0.0.2").size(9.0).color(palette.muted).monospace());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let theme_label = if self.theme == Theme::Calm { "Cyberpunk" } else { "Calm" };
                 if ui.add(egui::Button::new(RichText::new(theme_label).color(palette.text)).fill(palette.surface_raised).stroke(Stroke::new(1.0, palette.border)).corner_radius(10)).clicked() {
@@ -431,7 +445,7 @@ impl LucidApp {
             });
             return;
         }
-        if self.loading {
+        if self.active().loading {
             ui.vertical_centered(|ui| {
                 ui.add_space(80.0);
                 ui.spinner();
@@ -450,24 +464,41 @@ impl LucidApp {
         ui.separator();
         let width = ui.available_width().max(320.0);
         let layout = layout_document(&page.document, &page.stylesheet, width);
+        let mut followed_link: Option<String> = None;
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             let (response, painter) = ui.allocate_painter(Vec2::new(width, layout.height.max(280.0)), Sense::hover());
-            for operation in &layout.operations {
+            for (operation_index, operation) in layout.operations.iter().enumerate() {
                 match operation {
                     PaintOp::Rect { x, y, width, height, color, radius } => {
                         let rect = egui::Rect::from_min_size(response.rect.min + Vec2::new(*x, *y), Vec2::new(*width, *height));
                         painter.rect_filled(rect, CornerRadius::same((*radius).clamp(0.0, 255.0) as u8), Color32::from_rgb(color.0, color.1, color.2));
                     }
-                    PaintOp::Text { x, y, text, size, color, bold, italic } => {
+                    PaintOp::Text { x, y, text, size, color, bold, italic, href } => {
                         let pos = response.rect.min + Vec2::new(*x, *y);
                         let font = FontId::proportional(*size);
                         let text_color = Color32::from_rgb(color.0, color.1, color.2);
                         let _emphasis = (*bold, *italic);
-                        painter.text(pos, Align2::LEFT_TOP, text, font, text_color);
+                        let text_rect = painter.text(pos, Align2::LEFT_TOP, text, font, text_color);
+                        if let Some(href) = href {
+                            let link_response = ui.interact(
+                                text_rect,
+                                ui.id().with(("page-link", operation_index)),
+                                Sense::click(),
+                            );
+                            if link_response.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if link_response.clicked() {
+                                followed_link = resolve_link(&page.url, href);
+                            }
+                        }
                     }
                 }
             }
         });
+        if let Some(target) = followed_link {
+            self.navigate(&target, ui.ctx().clone(), true);
+        }
     }
 
     fn draw_library(&mut self, ui: &mut egui::Ui, palette: Palette, ctx: egui::Context) {
@@ -558,7 +589,7 @@ impl eframe::App for LucidApp {
                     ui.set_min_height(ui.available_height().max(500.0));
                     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                         if self.show_settings { self.draw_settings(ui, palette); }
-                        else if self.active().page.is_some() || self.active().error.is_some() || self.loading { self.draw_page(ui, palette); }
+                        else if self.active().page.is_some() || self.active().error.is_some() || self.active().loading { self.draw_page(ui, palette); }
                         else { self.draw_home(ui, palette, ctx.clone()); }
                     });
                 });
@@ -603,11 +634,39 @@ fn normalize_address(input: &str) -> String {
     let value = input.trim();
     if value.is_empty() || value == "lucid://home" { return "lucid://home".into(); }
     if value == "lucid://demo" { return value.into(); }
-    if value.starts_with("http://") || value.starts_with("https://") || value.starts_with("file://") { return value.into(); }
-    if !value.chars().any(char::is_whitespace) && value.contains('.') { return format!("https://{value}"); }
-    let encoded = value.bytes().map(|b| if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' { (b as char).to_string() } else { format!("%{b:02X}") }).collect::<Vec<_>>().join("");
+    let lower = value.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") { return value.to_owned(); }
+    if value.split_once(':').is_some_and(|(scheme, _)| {
+        !scheme.is_empty() && scheme.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+    }) && !value.chars().any(char::is_whitespace) {
+        return encode_search_query(value);
+    }
+    if !value.chars().any(char::is_whitespace) && value.contains('.') {
+        return format!("https://{value}");
+    }
+    encode_search_query(value)
+}
+
+fn encode_search_query(value: &str) -> String {
+    let encoded = value.bytes().map(|b| {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' { (b as char).to_string() }
+        else { format!("%{b:02X}") }
+    }).collect::<Vec<_>>().join("");
     format!("https://duckduckgo.com/?q={encoded}")
 }
+
+fn resolve_link(base: &str, href: &str) -> Option<String> {
+    let href = href.trim();
+    if href.is_empty() || href.starts_with('#') { return None; }
+    let base = reqwest::Url::parse(base).ok()?;
+    let resolved = base.join(href).ok()?;
+    match resolved.scheme() {
+        "http" | "https" => Some(resolved.to_string()),
+        _ => None,
+    }
+}
+
+const MAX_HTML_DOCUMENT_BYTES: u64 = 5 * 1024 * 1024;
 
 fn fetch_document(url: &str) -> Result<String, String> {
     if url == "lucid://demo" {
@@ -622,25 +681,36 @@ fn fetch_document(url: &str) -> Result<String, String> {
             <p>This page is being parsed and laid out by Lucid's own experimental HTML and CSS code.</p>
             <div class="panel"><h2>What is working?</h2><p>HTML tokenization, a small DOM tree, basic CSS selectors, simple declarations, and a top-to-bottom layout prototype.</p></div>
             <h2>What comes next?</h2><p class="note">Inline layout, flexbox, grid, proper HTML5 parsing, JavaScript, standards tests, security isolation, and many more web APIs.</p>
-            <p><a href="https://www.rust-lang.org">Learn about Rust (links are a planned interaction)</a></p>
+            <p><a href="https://www.rust-lang.org">Learn about Rust →</a></p>
         </body></html>"##.into());
     }
-    if let Some(path) = url.strip_prefix("file://") {
-        let path = if cfg!(windows) { path.trim_start_matches('/').replace('/', "\\") } else { path.to_owned() };
-        return fs::read_to_string(PathBuf::from(path)).map_err(|e| format!("Could not read local file: {e}"));
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("Lucid currently supports HTTP and HTTPS web addresses only. Local-file access is not enabled in this prototype.".into());
     }
     let client = reqwest::blocking::Client::builder()
-        .user_agent("LucidBrowser/0.0.1 (experimental independent engine)")
+        .user_agent("LucidBrowser/0.0.2 (experimental independent engine)")
         .timeout(Duration::from_secs(25))
         .redirect(reqwest::redirect::Policy::limited(8))
-        .build().map_err(|e| format!("Could not initialize network client: {e}"))?;
+        .build()
+        .map_err(|e| format!("Could not initialize network client: {e}"))?;
     let response = client.get(url).send().map_err(|e| format!("Network request failed: {e}"))?;
     if !response.status().is_success() { return Err(format!("Server returned {}", response.status())); }
-    let content_type = response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let content_type = response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok()).unwrap_or("");
     if !content_type.contains("text/html") && !content_type.contains("application/xhtml+xml") {
         return Err(format!("This prototype currently displays HTML documents only (received {content_type})."));
     }
-    response.text().map_err(|e| format!("Could not read response body: {e}"))
+    if response.content_length().is_some_and(|length| length > MAX_HTML_DOCUMENT_BYTES) {
+        return Err("The HTML document is larger than Lucid's current 5 MiB prototype limit.".into());
+    }
+    let mut body = String::new();
+    let bytes_read = response.take(MAX_HTML_DOCUMENT_BYTES + 1)
+        .read_to_string(&mut body)
+        .map_err(|e| format!("Could not read HTML response: {e}"))?;
+    if bytes_read as u64 > MAX_HTML_DOCUMENT_BYTES {
+        return Err("The HTML document exceeded Lucid's current 5 MiB prototype limit.".into());
+    }
+    Ok(body)
 }
 
 fn main() -> eframe::Result {
@@ -663,6 +733,15 @@ mod tests {
         assert_eq!(normalize_address("example.com"), "https://example.com");
         assert_eq!(normalize_address("hello world"), "https://duckduckgo.com/?q=hello%20world");
         assert_eq!(normalize_address("lucid://demo"), "lucid://demo");
+        assert!(normalize_address("file:///C:/Users/test/private.html").starts_with("https://duckduckgo.com/?q="));
+        assert!(normalize_address("javascript:alert(1)").starts_with("https://duckduckgo.com/?q="));
+    }
+
+    #[test]
+    fn links_resolve_relative_to_the_current_document() {
+        assert_eq!(resolve_link("https://example.com/docs/page.html", "../guide"), Some("https://example.com/guide".into()));
+        assert_eq!(resolve_link("https://example.com", "javascript:alert(1)"), None);
+        assert_eq!(resolve_link("https://example.com", "file:///C:/secret.txt"), None);
     }
 
     #[test]

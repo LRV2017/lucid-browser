@@ -6,12 +6,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: lucid-windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   build-windows:
+    name: Test and build Windows x64
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -25,6 +31,9 @@ jobs:
       - name: Run engine and application tests
         run: cargo test --workspace --all-targets
 
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets
+
       - name: Build release executable
         run: cargo build --release --package lucid-browser
 
@@ -34,6 +43,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/release/lucid-browser.exe dist/lucid-browser.exe
           Copy-Item README.md dist/README.txt
+          Copy-Item LICENSE dist/LICENSE.txt
           Compress-Archive -Path dist/* -DestinationPath Lucid-Browser-Windows-x64.zip -Force
 
       - name: Upload Windows executable and ZIP

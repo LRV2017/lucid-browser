@@ -155,6 +155,18 @@ pub fn parse_html(source: &str) -> Document {
             append_node(&mut stack, &mut roots, Node::Element(element));
         } else {
             stack.push(element);
+            // Raw-text elements keep markup-looking characters as text. Script
+            // text stays inert until an independent JS runtime is designed.
+            if matches!(tag.as_str(), "style" | "script") {
+                let closing = find_raw_text_end_tag(&chars, cursor, &tag).unwrap_or(chars.len());
+                if closing > cursor {
+                    let raw_text: String = chars[cursor..closing].iter().collect();
+                    if let Some(parent) = stack.last_mut() {
+                        parent.children.push(Node::Text(raw_text));
+                    }
+                }
+                cursor = closing;
+            }
         }
     }
 
@@ -163,6 +175,18 @@ pub fn parse_html(source: &str) -> Document {
     }
 
     Document { children: roots }
+}
+
+fn find_raw_text_end_tag(chars: &[char], from: usize, tag: &str) -> Option<usize> {
+    let closing = format!("</{tag}");
+    (from..chars.len()).find(|&index| {
+        let end = index.saturating_add(closing.chars().count());
+        let matches_tag = chars.get(index..end).is_some_and(|slice| {
+            slice.iter().zip(closing.chars()).all(|(actual, expected)| actual.eq_ignore_ascii_case(&expected))
+        });
+        let valid_boundary = chars.get(end).is_some_and(|next| next.is_whitespace() || *next == '>');
+        matches_tag && valid_boundary
+    })
 }
 
 fn starts_with(chars: &[char], at: usize, needle: &str) -> bool {
@@ -259,11 +283,12 @@ pub struct Style {
     pub margin: f32,
     pub padding: f32,
     pub radius: f32,
+    pub link: Option<String>,
 }
 
 impl Default for Style {
     fn default() -> Self {
-        Self { display: Display::Block, color: None, background: None, font_size: 16.0, bold: false, italic: false, margin: 4.0, padding: 0.0, radius: 0.0 }
+        Self { display: Display::Block, color: None, background: None, font_size: 16.0, bold: false, italic: false, margin: 4.0, padding: 0.0, radius: 0.0, link: None }
     }
 }
 
@@ -337,6 +362,7 @@ fn merge_style(base: &mut Style, add: &Style) {
     if add.margin != 4.0 { base.margin = add.margin; }
     if add.padding != 0.0 { base.padding = add.padding; }
     if add.radius != 0.0 { base.radius = add.radius; }
+    if add.link.is_some() { base.link = add.link.clone(); }
 }
 
 fn default_style(tag: &str) -> Style {
@@ -364,6 +390,9 @@ fn style_for(element: &Element, sheet: &Stylesheet) -> Style {
     matches.sort_by_key(|r| selector_specificity(&r.selector));
     for rule in matches { merge_style(&mut style, &rule.declarations); }
     if let Some(inline) = element.attr("style") { merge_style(&mut style, &parse_declarations(inline)); }
+    if element.tag == "a" {
+        style.link = element.attr("href").map(str::to_owned);
+    }
     style
 }
 
@@ -411,7 +440,7 @@ fn collect_text(nodes: &[Node], output: &mut String) {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PaintOp {
     Rect { x: f32, y: f32, width: f32, height: f32, color: Color, radius: f32 },
-    Text { x: f32, y: f32, text: String, size: f32, color: Color, bold: bool, italic: bool },
+    Text { x: f32, y: f32, text: String, size: f32, color: Color, bold: bool, italic: bool, href: Option<String> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -469,7 +498,7 @@ fn layout_nodes(nodes: &[Node], sheet: &Stylesheet, x: f32, y: &mut f32, width: 
                 layout_nodes(&element.children, sheet, child_x, y, child_width, ops, child_style);
                 if element.tag == "img" {
                     let alt = element.attr("alt").unwrap_or("Image");
-                    ops.push(PaintOp::Text { x: child_x, y: *y, text: format!("[ {alt} ]"), size: 13.0, color: Color::MUTED, bold: false, italic: true });
+                    ops.push(PaintOp::Text { x: child_x, y: *y, text: format!("[ {alt} ]"), size: 13.0, color: Color::MUTED, bold: false, italic: true, href: None });
                     *y += 24.0;
                 }
                 *y += pad;
@@ -505,7 +534,7 @@ fn layout_text(text: &str, x: f32, y: &mut f32, width: f32, style: &Style, ops: 
 
 fn push_text_line(line: &str, x: f32, y: &mut f32, style: &Style, ops: &mut Vec<PaintOp>) {
     let color = style.color.as_deref().and_then(parse_color).unwrap_or(Color::TEXT);
-    ops.push(PaintOp::Text { x, y: *y, text: line.to_owned(), size: style.font_size, color, bold: style.bold, italic: style.italic });
+    ops.push(PaintOp::Text { x, y: *y, text: line.to_owned(), size: style.font_size, color, bold: style.bold, italic: style.italic, href: style.link.clone() });
     *y += style.font_size * 1.45;
 }
 
@@ -550,6 +579,34 @@ mod tests {
         let sheet = collect_styles(&doc);
         assert_eq!(sheet.rules.len(), 1);
         assert_eq!(sheet.rules[0].selector, "p");
+    }
+
+    #[test]
+    fn style_raw_text_preserves_markup_like_characters() {
+        let doc = parse_html("<style>.card { width: calc(100% - 2px); }</style><p>Visible</p>");
+        let styles = collect_styles(&doc);
+        assert_eq!(styles.rules.len(), 1);
+        assert_eq!(styles.rules[0].selector, ".card");
+    }
+
+    #[test]
+    fn script_raw_text_is_kept_inert() {
+        let doc = parse_html("<script>const check = a < b ? '<x>' : 'y';</script><p>Visible</p>");
+        assert_eq!(doc.children.len(), 2);
+        let Node::Element(script) = &doc.children[0] else { panic!("expected script element") };
+        let Node::Text(contents) = &script.children[0] else { panic!("expected raw text") };
+        assert!(contents.contains("a < b"));
+    }
+
+    #[test]
+    fn anchor_href_is_preserved_in_paint_operations() {
+        let doc = parse_html("<a href='/guide'>Read the guide</a>");
+        let output = layout_document(&doc, &Stylesheet::default(), 600.0);
+        assert!(output.operations.iter().any(|op| matches!(
+            op,
+            PaintOp::Text { text, href: Some(href), .. }
+                if text == "Read the guide" && href == "/guide"
+        )));
     }
 
     #[test]

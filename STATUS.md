@@ -1,25 +1,31 @@
-# Project Status — 0.0.1 Experimental
+# Project Status — 0.0.2 Experimental
 
-This is the first source-code milestone for an independent browser engine and native browser UI.
+Lucid is an independent browser-engine research project and native desktop application.
 
-## Implemented
+## Implemented in this prototype
 
-- Native desktop shell with two selectable theme directions.
-- Interactive tabs, address entry, basic navigation history, tab-separated workspaces, quick links, library and settings.
-- Lucid-owned HTML subset parser, DOM tree structure, small CSS selector/declaration parser, top-to-bottom block layout and paint-operation generation.
-- Local engine demo page.
-- Experimental HTTPS/HTTP HTML fetching.
-- Unit tests and a Windows build workflow.
+- Native desktop UI with Lucid Calm and Lucid Cyberpunk themes.
+- Tabs, workspace switching, address entry, basic navigation history, library, quick access and settings.
+- Lucid-owned HTML tokenizer/tree builder for a small supported subset.
+- Raw-text preservation for `style` and `script` elements; scripts remain inert and are not executed.
+- Basic CSS selector/declaration parsing and a simple style cascade.
+- Top-to-bottom block layout and paint operation generation.
+- Anchor href preservation and clickable HTTP/HTTPS links with relative URL resolution.
+- Per-tab navigation generation checks to ignore stale asynchronous responses.
+- HTTP response body limit of 5 MiB.
+- Arbitrary local-file URL access disabled.
+- Unit tests and GitHub Actions Windows build.
 
 ## Not implemented
 
-- JavaScript execution or DOM APIs exposed to JavaScript.
-- Full WHATWG HTML parsing and CSS specifications.
-- Inline formatting, flexbox, grid, robust text shaping, SVG, canvas and transforms.
-- Images fetched from pages, audio/video, WebAssembly and workers.
-- Cookies, storage, service workers, CSP, CORS and full origin model.
-- Sandboxing, renderer process isolation, site isolation and security audit.
-- Extensions, uBlock Origin, native filter-list blocking, production download manager and password manager.
-- Full modern-site compatibility.
+- Full WHATWG HTML parsing or complete CSS specifications.
+- JavaScript, script DOM bindings, event loop or browser Web APIs.
+- Inline layout, correct line boxes, flexbox, grid, floats, complex positioning or standards-correct text shaping.
+- Images, SVG, canvas, audio/video, WebAssembly, workers and service workers.
+- Cookies, storage, CSP, CORS, full origin model and certificate UI.
+- Renderer sandbox, process separation, site isolation, crash recovery and security audit.
+- Extensions, filter-list blocking, password manager and production downloads.
+- Accessibility tree, screen-reader support and broad keyboard navigation.
+- Broad modern website compatibility.
 
-This build is for development and engine experimentation only. It must not be treated as a secure everyday browser.
+**This build is experimental. Do not use it for sensitive browsing.**
