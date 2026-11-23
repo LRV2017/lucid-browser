@@ -522,7 +522,7 @@ pub fn parse_color(input: &str) -> Option<Color> {
     }
     match value.as_str() {
         "black" => Some(Color(0, 0, 0)), "white" => Some(Color(255, 255, 255)),
-        "red" => Some(Color(220, 35, 50), "green" => Some(Color(30, 145, 75)),
+        "red" => Some(Color(220, 35, 50)), "green" => Some(Color(30, 145, 75)),
         "blue" => Some(Color(45, 100, 210)), "gray" | "grey" => Some(Color(128, 128, 128)),
         "purple" => Some(Color(128, 60, 180)), "orange" => Some(Color(225, 125, 35)),
         _ => None,
