@@ -1214,6 +1214,7 @@ impl eframe::App for LucidApp {
                     }
                 });
             }
+        });
         if ctx.input(|i| i.key_pressed(egui::Key::K) && i.modifiers.ctrl) { self.show_command_palette = true; }
         if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) && (self.active().page.is_some() || is_web_url(&self.active().url)) { self.show_find = true; self.find_focus = true; }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.show_find { self.show_find = false; self.find_query.clear(); }
