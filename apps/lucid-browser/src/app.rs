@@ -1114,9 +1114,9 @@ impl LucidApp {
         ui.checkbox(&mut self.profile.animations_enabled, "Enable interface animations");
         ui.add_space(16.0);
         ui.label(RichText::new("ENGINE STATUS").size(10.0).strong().color(palette.muted));
-        ui.label(RichText::new("Lucid Engine · Native renderer prototype").color(palette.text));
-        ui.label(RichText::new("Lucid-owned HTML tree, CSS subset, native layout, image quads and page painting").size(11.0).color(palette.muted));
-        ui.label(RichText::new("Still under construction: JavaScript, full HTML/CSS, fonts, media, storage APIs, sandboxing and extensions.").size(11.0).color(palette.muted));
+        ui.label(RichText::new("Chromium Embedded Framework · Blink / V8").color(palette.text));
+        ui.label(RichText::new("Modern website rendering through CEF; Lucid retains its own browser chrome and tab system.").size(11.0).color(palette.muted));
+        ui.label(RichText::new("CEF runtime packaging, page compatibility, permissions and browser security still require verification.").size(11.0).color(palette.muted));
         ui.add_space(12.0);
         if ui.button("Save settings now").clicked() { self.persist_profile(); }
     }
@@ -1124,6 +1124,7 @@ impl LucidApp {
 
 impl eframe::App for LucidApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.cef_view_rect = None;
         self.poll_loads(ui.ctx().clone());
         self.poll_downloads();
         if !self.session_restore_started {
