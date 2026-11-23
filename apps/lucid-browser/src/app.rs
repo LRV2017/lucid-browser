@@ -1125,6 +1125,8 @@ impl LucidApp {
 impl eframe::App for LucidApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.cef_view_rect = None;
+        #[cfg(target_os = "windows")]
+        cef::do_message_loop_work();
         self.poll_loads(ui.ctx().clone());
         self.poll_downloads();
         if !self.session_restore_started {
