@@ -1,0 +1,10 @@
+[package]
+name = "lucid-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+eframe = { version = "0.37.0", default-features = true }
+lucid-engine = { path = "../../crates/lucid-engine" }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls"] }
