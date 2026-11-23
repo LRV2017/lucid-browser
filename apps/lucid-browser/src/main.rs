@@ -8,7 +8,7 @@ use downloads::{DownloadUpdate, run_download};
 use performance::{PerformanceMonitor, format_bytes};
 use persistence::{BrowserProfile, SavedTab};
 use std::time::Instant;
-use lucid_engine::{Document, PaintOp, Stylesheet, collect_styles, document_title, layout_document, parse_html};
+use lucid_engine::{Document, Node, PaintOp, Stylesheet, collect_styles, document_title, layout_document, parse_html};
 use std::io::Read;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -121,6 +121,9 @@ struct LucidApp {
     show_downloads: bool,
     show_command_palette: bool,
     command_query: String,
+    show_find: bool,
+    find_query: String,
+    find_focus: bool,
     active_workspace: String,
     workspace_name_input: String,
     bookmarks_bar: bool,
@@ -162,6 +165,7 @@ impl Default for LucidApp {
             show_library: false, show_settings: false, show_history: false,
             show_gx_control: false, show_mods: false, show_corner: false, show_downloads: false,
             show_command_palette: false, command_query: String::new(),
+            show_find: false, find_query: String::new(), find_focus: false,
             active_workspace, workspace_name_input: String::new(),
             bookmarks_bar: profile.bookmarks_bar, profile,
             performance: PerformanceMonitor::new(),
@@ -668,6 +672,19 @@ impl LucidApp {
             }
             return;
         };
+        if self.show_find {
+            let mut close_find = false;
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("FIND").strong().size(10.0).color(palette.accent));
+                let response = ui.add(TextEdit::singleline(&mut self.find_query).id(egui::Id::new("lucid-find-bar")).hint_text("Find on this page…").desired_width(260.0));
+                if self.find_focus { response.request_focus(); self.find_focus = false; }
+                let matches = count_text_matches(&page.document.children, &self.find_query);
+                ui.label(RichText::new(if self.find_query.trim().is_empty() { "Type to search".into() } else { format!("{matches} matches") }).size(11.0).color(palette.muted));
+                if ui.button("×").on_hover_text("Close find bar (Esc)").clicked() { close_find = true; }
+            });
+            if close_find { self.show_find = false; self.find_query.clear(); }
+            ui.separator();
+        }
         ui.horizontal(|ui| {
             ui.label(RichText::new(&page.title).strong().color(palette.text));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -691,6 +708,11 @@ impl LucidApp {
                         let font = FontId::proportional(*size);
                         let text_color = Color32::from_rgb(color.0, color.1, color.2);
                         let _emphasis = (*bold, *italic);
+                        let is_find_match = !self.find_query.trim().is_empty() && text.to_lowercase().contains(&self.find_query.to_lowercase());
+                        if is_find_match {
+                            let highlight = egui::Rect::from_min_size(pos, Vec2::new((width - *x).max(80.0), (*size * 1.55).max(18.0)));
+                            painter.rect_filled(highlight, CornerRadius::same(3), palette.accent.gamma_multiply(0.22));
+                        }
                         let text_rect = painter.text(pos, Align2::LEFT_TOP, text, font, text_color);
                         if let Some(href) = href {
                             let link_response = ui.interact(
@@ -1026,6 +1048,8 @@ impl eframe::App for LucidApp {
         });
 
         if ctx.input(|i| i.key_pressed(egui::Key::K) && i.modifiers.ctrl) { self.show_command_palette = true; }
+        if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) && self.active().page.is_some() { self.show_find = true; self.find_focus = true; }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.show_find { self.show_find = false; self.find_query.clear(); }
         if ctx.input(|i| i.key_pressed(egui::Key::T) && i.modifiers.ctrl) { self.new_tab(); }
         if ctx.input(|i| i.key_pressed(egui::Key::W) && i.modifiers.ctrl) { self.close_tab(self.active_tab); }
         if ctx.input(|i| i.key_pressed(egui::Key::F12)) { self.open_panel("control"); }
@@ -1042,6 +1066,15 @@ impl eframe::App for LucidApp {
             });
         }
     }
+}
+
+fn count_text_matches(nodes: &[Node], query: &str) -> usize {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() { return 0; }
+    nodes.iter().map(|node| match node {
+        Node::Text(text) => text.to_lowercase().matches(&needle).count(),
+        Node::Element(element) => count_text_matches(&element.children, &needle),
+    }).sum()
 }
 
 fn stat_card(ui: &mut egui::Ui, palette: Palette, icon: &str, label: &str, value: &str, detail: &str) {
