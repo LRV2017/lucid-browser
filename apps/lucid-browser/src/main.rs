@@ -651,10 +651,10 @@ impl LucidApp {
         if let Some(error) = self.active().error.clone() {
             ui.vertical_centered(|ui| {
                 ui.add_space(80.0);
-                ui.label(RichText::new("Unable to load this page").size(24.0).strong().color(palette.text));
+                ui.label(RichText::new("Unable to load this page").size(24.0).strong().color(Color32::from_rgb(40, 36, 46)));
                 ui.add_space(8.0);
-                ui.label(RichText::new(error).color(palette.muted));
-                ui.label(RichText::new("Check the address and your internet connection.").size(12.0).color(palette.muted));
+                ui.label(RichText::new(error).color(Color32::from_rgb(105, 100, 112)));
+                ui.label(RichText::new("Check the address and your internet connection.").size(12.0).color(Color32::from_rgb(105, 100, 112)));
             });
             return;
         }
@@ -662,7 +662,7 @@ impl LucidApp {
             ui.vertical_centered(|ui| {
                 ui.add_space(80.0);
                 ui.spinner();
-                ui.label(RichText::new("Loading with Lucid Engine…").color(palette.muted));
+                ui.label(RichText::new("Loading with Lucid Engine…").color(Color32::from_rgb(105, 100, 112)));
             });
             return;
         }
@@ -684,9 +684,9 @@ impl LucidApp {
             return;
         };
         ui.horizontal(|ui| {
-            ui.label(RichText::new(&page.title).strong().color(palette.text));
+            ui.label(RichText::new(&page.title).strong().color(Color32::from_rgb(40, 36, 46)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(RichText::new(&page.url).size(10.0).color(palette.muted));
+                ui.label(RichText::new(&page.url).size(10.0).color(Color32::from_rgb(105, 100, 112)));
             });
         });
         ui.separator();
@@ -1020,11 +1020,13 @@ impl eframe::App for LucidApp {
                 else if self.show_downloads { self.draw_downloads(ui, palette); }
                 else if self.show_library { self.draw_library(ui, palette, ctx.clone()); }
                 else if self.active().page.is_some() || self.active().error.is_some() || self.active().loading {
-                    self.draw_page(ui, palette);
+                    Frame::new().fill(Color32::WHITE).inner_margin(Margin::same(18)).corner_radius(10)
+                        .show(ui, |ui| self.draw_page(ui, palette));
                 } else {
                     self.draw_home(ui, palette, ctx.clone());
                 }
             });
+        });
         if ctx.input(|i| i.key_pressed(egui::Key::K) && i.modifiers.ctrl) { self.show_command_palette = true; }
         if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) && (self.active().page.is_some() || is_web_url(&self.active().url)) { self.show_find = true; self.find_focus = true; }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.show_find { self.show_find = false; self.find_query.clear(); }
@@ -1144,6 +1146,67 @@ impl<R: Read> Read for RateLimitedReader<R> {
         if let Some(delay) = target.checked_sub(self.started.elapsed()) { thread::sleep(delay); }
         Ok(count)
     }
+}
+
+const MAX_IMAGE_RESOURCE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_IMAGE_PIXELS: u64 = 16_000_000;
+
+/// Load a page through Lucid's own network, HTML, CSS, image and paint pipeline.
+/// Script elements remain inert until the JavaScript runtime is implemented.
+fn load_page(url: &str, protection_enabled: bool, network_limit_kib: u32) -> Result<LoadedPage, String> {
+    let html = fetch_document(url, protection_enabled, network_limit_kib)?;
+    let document = parse_html(&html);
+    let inline_styles = collect_styles(&document);
+    let mut stylesheet = Stylesheet::default();
+    let mut images = BTreeMap::new();
+
+    if is_web_url(url) {
+        let base = reqwest::Url::parse(url).map_err(|error| format!("Invalid page URL: {error}"))?;
+        let loader = ResourceLoader::new(MAX_IMAGE_RESOURCE_BYTES)
+            .map_err(|error| format!("Could not initialize Lucid's resource loader: {error}"))?;
+
+        // External sheets are loaded by Lucid and parsed by the native CSS pipeline.
+        if let Ok(external_styles) = load_document_stylesheets(&document, &base, &loader) {
+            stylesheet = external_styles;
+        }
+        // Inline author styles are appended after linked sheets in this first cascade pass.
+        stylesheet.rules.extend(inline_styles.rules);
+
+        // Decode HTML image resources and pass RGBA pixels to Lucid's native painter.
+        for reference in discover_document_resources(&document, &base)
+            .into_iter()
+            .filter(|resource| resource.kind == ResourceKind::Image)
+            .take(32)
+        {
+            let Ok(resource) = loader.fetch(&reference) else { continue };
+            let Ok(decoded) = image::load_from_memory(&resource.bytes) else { continue };
+            if u64::from(decoded.width()) * u64::from(decoded.height()) > MAX_IMAGE_PIXELS {
+                continue;
+            }
+            let rgba = decoded.to_rgba8();
+            images.insert(reference.url.to_string(), EngineImage {
+                width: rgba.width() as usize,
+                height: rgba.height() as usize,
+                rgba: rgba.into_raw(),
+            });
+        }
+    } else {
+        stylesheet = inline_styles;
+    }
+
+    let title = document_title(&document).unwrap_or_else(|| {
+        reqwest::Url::parse(url).ok()
+            .and_then(|parsed| parsed.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "Lucid page".into())
+    });
+
+    Ok(LoadedPage {
+        url: url.to_owned(),
+        title,
+        document,
+        stylesheet,
+        images,
+    })
 }
 
 fn fetch_document(url: &str, protection_enabled: bool, network_limit_kib: u32) -> Result<String, String> {
