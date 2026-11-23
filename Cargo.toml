@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/lucid-engine", "apps/lucid-browser"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+authors = ["Lucid Browser Contributors"]
+repository = "https://github.com/LRV2017/lucid-browser"
+
+[workspace.dependencies]
