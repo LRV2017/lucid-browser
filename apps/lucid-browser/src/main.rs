@@ -324,17 +324,15 @@ impl LucidApp {
 
     fn navigate(&mut self, input: &str, ctx: egui::Context, push_history: bool) {
         let url = normalize_address(input);
-        let request_generation = self.next_request_generation;
-        self.next_request_generation = self.next_request_generation.wrapping_add(1).max(1);
-        let tab_id = self.active().id;
         {
             let tab = self.active_mut();
-            tab.request_generation = request_generation;
-            tab.loading = url != "lucid://home";
+            tab.request_generation = tab.request_generation.wrapping_add(1).max(1);
             tab.url = url.clone();
             tab.title = if url == "lucid://home" { "New tab".into() } else { "Loading…".into() };
             tab.page = None;
             tab.error = None;
+            tab.loading = is_web_url(&url);
+            tab.discarded = false;
             if push_history {
                 if tab.history_index + 1 < tab.history.len() {
                     tab.history.truncate(tab.history_index + 1);
@@ -345,63 +343,183 @@ impl LucidApp {
                 tab.history_index = tab.history.len().saturating_sub(1);
             }
         }
+
         self.address = url.clone();
         self.close_panels();
+        self.webview_error = None;
+
         if url == "lucid://home" {
-            self.status = "Ready".into();
+            self.status = "Ready · Lucid home".into();
+            ctx.request_repaint();
             return;
         }
-        self.status = format!("Connecting to {url}");
-        let tx = self.tx.clone();
-        let protection_enabled = self.profile.navigation_protection;
-        let network_limit_kib = self.profile.navigation_limit_kib;
-        thread::spawn(move || {
-            let fetched = fetch_document(&url, protection_enabled, network_limit_kib);
-            let event = match fetched {
-                Ok(html) => LoadResult::Success { tab_id, request_generation, url, html },
-                Err(message) => LoadResult::Failure { tab_id, request_generation, url, message },
-            };
-            let _ = tx.send(event);
-            ctx.request_repaint_after(Duration::from_millis(20));
-        });
-    }
 
-    fn poll_loads(&mut self) {
-        while let Ok(event) = self.rx.try_recv() {
-            match event {
-                LoadResult::Success { tab_id, request_generation, url, html } => {
-                    let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else { continue };
-                    if tab.request_generation != request_generation { continue; }
+        if url == "lucid://demo" {
+            match fetch_document("lucid://demo", false, 0) {
+                Ok(html) => {
                     let document = parse_html(&html);
                     let stylesheet = collect_styles(&document);
-                    let title = document_title(&document).unwrap_or_else(|| url.clone());
+                    let title = document_title(&document).unwrap_or_else(|| "Lucid Engine Demo".into());
+                    let tab = self.active_mut();
                     tab.title = title.clone();
-                    tab.url = url.clone();
                     tab.page = Some(LoadedPage { url: url.clone(), title: title.clone(), document, stylesheet });
-                    tab.error = None;
                     tab.loading = false;
+                    self.profile.add_history(title, url);
+                    self.status = "Rendered by Lucid Engine · Experimental demo".into();
+                }
+                Err(message) => {
+                    let tab = self.active_mut();
+                    tab.error = Some(message);
+                    tab.loading = false;
+                    self.status = "Lucid Engine demo failed".into();
+                }
+            }
+            ctx.request_repaint();
+            return;
+        }
+
+        self.status = format!("Loading {url} · WebView2");
+        #[cfg(target_os = "windows")]
+        if let Some(Some(webview)) = self.webviews.get(self.active_tab) {
+            if let Err(error) = webview.load_url(&url) {
+                self.webview_error = Some(format!("WebView2 navigation failed: {error}"));
+                self.status = "Navigation failed".into();
+                self.active_mut().loading = false;
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn poll_loads(&mut self, ctx: egui::Context) {
+        while let Ok(event) = self.rx.try_recv() {
+            match event {
+                BrowserEvent::NavigationStarted { tab_id, url } => {
+                    let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else { continue };
+                    let changed = tab.url != url;
+                    tab.url = url.clone();
+                    tab.page = None;
+                    tab.error = None;
+                    tab.loading = true;
                     tab.discarded = false;
-                    self.profile.add_history(title.clone(), url.clone());
+                    if changed {
+                        if tab.history_index + 1 < tab.history.len() {
+                            tab.history.truncate(tab.history_index + 1);
+                        }
+                        if tab.history.last() != Some(&url) {
+                            tab.history.push(url.clone());
+                        }
+                        tab.history_index = tab.history.len().saturating_sub(1);
+                    }
                     if self.tabs.get(self.active_tab).is_some_and(|active| active.id == tab_id) {
-                        self.status = "Loaded with Lucid Engine · JavaScript not yet supported".into();
+                        self.address = url.clone();
+                        self.status = format!("Loading {url} · WebView2");
                     }
                 }
-                LoadResult::Failure { tab_id, request_generation, url, message } => {
+                BrowserEvent::TitleChanged { tab_id, title } => {
                     let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else { continue };
-                    if tab.request_generation != request_generation { continue; }
-                    tab.title = "Page unavailable".into();
-                    tab.url = url;
-                    tab.error = Some(message);
-                    tab.page = None;
+                    if !title.trim().is_empty() { tab.title = title.clone(); }
                     tab.loading = false;
+                    let url = tab.url.clone();
+                    self.profile.add_history(tab.title.clone(), url);
                     if self.tabs.get(self.active_tab).is_some_and(|active| active.id == tab_id) {
-                        self.status = "Navigation failed".into();
+                        self.status = "Page ready · Microsoft Edge WebView2 engine".into();
                     }
+                }
+                BrowserEvent::OpenNewTab { url } => {
+                    self.new_tab();
+                    let destination = if is_web_url(&url) { url } else { "lucid://home".into() };
+                    self.navigate(&destination, ctx.clone(), true);
                 }
             }
         }
     }
 
+    fn find_in_page(&self) {
+        #[cfg(target_os = "windows")]
+        if let Some(Some(webview)) = self.webviews.get(self.active_tab) {
+            let encoded = serde_json::to_string(&self.find_query).unwrap_or_else(|_| "\"\"".into());
+            let script = format!(
+                "window.getSelection()?.removeAllRanges(); if ({encoded}.length) window.find({encoded}, false, false, true, false, true, false);"
+            );
+            let _ = webview.evaluate_script(&script);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn sync_webviews(&mut self, frame: &eframe::Frame, ctx: &egui::Context) {
+        let panels_open = self.show_library || self.show_settings || self.show_history
+            || self.show_gx_control || self.show_mods || self.show_corner || self.show_downloads;
+        let active = self.active_tab;
+        let active_is_web = is_web_url(&self.active().url);
+        let should_show = active_is_web && !panels_open && !self.show_command_palette
+            && self.webview_rect.is_some();
+
+        for (index, view) in self.webviews.iter().enumerate() {
+            if let Some(view) = view {
+                let _ = view.set_visible(index == active && should_show);
+            }
+        }
+
+        if !active_is_web || panels_open || self.show_command_palette {
+            return;
+        }
+
+        let Some(rect) = self.webview_rect else { return };
+        let bounds = WebViewRect {
+            position: LogicalPosition::new(rect.min.x.max(0.0), rect.min.y.max(0.0)).into(),
+            size: LogicalSize::new(rect.width().max(1.0), rect.height().max(1.0)).into(),
+        };
+
+        if self.webviews.get(active).is_none_or(|slot| slot.is_none()) {
+            let tab_id = self.active().id;
+            let url = self.active().url.clone();
+            let navigation_tx = self.tx.clone();
+            let title_tx = self.tx.clone();
+            let popup_tx = self.tx.clone();
+            let navigation_ctx = ctx.clone();
+            let title_ctx = ctx.clone();
+            let popup_ctx = ctx.clone();
+            let builder = WebViewBuilder::new()
+                .with_url(&url)
+                .with_bounds(bounds)
+                .with_devtools(true)
+                .with_autoplay(true)
+                .with_clipboard(true)
+                .with_profile_name("Lucid")
+                .with_browser_extensions_enabled(true)
+                .with_navigation_handler(move |next_url| {
+                    let _ = navigation_tx.send(BrowserEvent::NavigationStarted { tab_id, url: next_url });
+                    navigation_ctx.request_repaint();
+                    true
+                })
+                .with_document_title_changed_handler(move |title| {
+                    let _ = title_tx.send(BrowserEvent::TitleChanged { tab_id, title });
+                    title_ctx.request_repaint();
+                })
+                .with_new_window_req_handler(move |next_url, _features| {
+                    let _ = popup_tx.send(BrowserEvent::OpenNewTab { url: next_url });
+                    popup_ctx.request_repaint();
+                    NewWindowResponse::Deny
+                });
+
+            match builder.build_as_child(frame) {
+                Ok(webview) => {
+                    self.webviews[active] = Some(webview);
+                    self.webview_error = None;
+                    self.status = "Connected · Microsoft Edge WebView2".into();
+                }
+                Err(error) => {
+                    self.webview_error = Some(format!(
+                        "Lucid couldn't start its WebView2 renderer: {error}. Install the Microsoft Edge WebView2 Runtime and restart Lucid."
+                    ));
+                    self.status = "WebView2 runtime unavailable".into();
+                }
+            }
+        } else if let Some(Some(webview)) = self.webviews.get(active) {
+            let _ = webview.set_bounds(bounds);
+            let _ = webview.set_visible(should_show);
+        }
+    }
     fn execute_command(&mut self, command: &str, ctx: egui::Context) {
         match command {
             "New tab" => self.new_tab(),
