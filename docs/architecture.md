@@ -69,7 +69,7 @@ Each tab carries a request generation. A navigation increments that generation, 
 
 ## Process and security architecture target
 
-The current prototype is single-process. Before untrusted-site use, the architecture must move towards isolated renderer processes and a brokered network/service layer. Site isolation, sandbox policies, GPU process boundaries, IPC validation, permission prompts, origin security, same-origin enforcement and robust crash recovery are release blockers, not optional polish.
+The current prototype is single-process. Browser profiles and tab-session metadata are stored locally. The UI Control Center reports the Lucid process and total system memory; it does not claim per-tab process metrics. Memory Saver drops parsed document objects from background tabs and reloads them on demand. Before untrusted-site use, the architecture must move towards isolated renderer processes and a brokered network/service layer. Site isolation, sandbox policies, GPU process boundaries, IPC validation, permission prompts, origin security, same-origin enforcement and robust crash recovery are release blockers, not optional polish.
 
 ## Dependencies policy
 

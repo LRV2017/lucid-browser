@@ -17,16 +17,13 @@ jobs:
   build-windows:
     name: Test and build Windows x64
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
 
       - name: Run engine and application tests
         run: cargo test --workspace --all-targets

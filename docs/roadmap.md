@@ -1,65 +1,62 @@
 # Lucid Browser Roadmap
 
-This is an engineering sequence with explicit quality gates, not a promise of dates or a claim of parity with mature browsers.
+This roadmap is an engineering sequence with release gates, not a delivery-date promise or a claim of parity with mature browsers. The complete feature and quality contract is in product-quality-spec.md.
 
-## 0.0.2 — Correctness guardrails (current)
-- [x] Native desktop shell and two distinct themes.
-- [x] Original HTML tokenizer/tree-builder prototype.
-- [x] Limited CSS cascade, block layout and paint operations.
-- [x] Inert raw-text handling for style/script contents.
-- [x] Anchor href preservation, click hit-testing and relative HTTP/HTTPS URL resolution.
-- [x] Per-tab navigation generations to discard stale responses.
-- [x] Bounded HTML response reads and no arbitrary local-file URL access.
-- [x] Automated tests and Windows build workflow.
+## 0.0.3 — Power-user UI foundations (current)
+- [x] Calm and Cyberpunk themes.
+- [x] Persistent profile, workspaces, bookmarks, history and session metadata.
+- [x] Pinned tabs and manual background-tab sleeping.
+- [x] GX-style Control Center with process/system metrics.
+- [x] Per-navigation HTML bandwidth governor.
+- [x] Top-level navigation host protection.
+- [x] Downloads queue, Mod Center and gaming shortcut hub.
+- [x] Automated Windows build workflow.
 
-## 0.0.3 — HTML parsing
-- Token stream with source locations and deterministic diagnostics.
-- Improve tree construction and malformed-markup recovery.
-- Numeric references and broader entity handling.
-- Raw-text and RCDATA parsing states.
-- Parser fuzzing and regression corpus.
+## 0.0.4 — Browser application completeness
+- Tab groups/islands, tab search, previews, drag/drop and split-screen.
+- Full session/crash restore, multiple profiles, guest and private sessions.
+- User-manageable speed dial, widgets and keyboard shortcut editor.
+- Downloads pause/resume, integrity checking and safe-file handling.
+- Pinboards, notes, snapshots, reader view, video pop-out and media controls.
+- Sidebar integration architecture and configurable game content feeds.
 
-## 0.0.4 — DOM and URLs
-- Stable node identifiers and document ownership.
-- DOM traversal, mutation, attributes and text content.
+## 0.0.5 — HTML and DOM correctness
+- Token stream with source locations and deterministic error recovery.
+- HTML tree construction and malformed-markup handling against standards tests.
+- DOM identity, traversal, mutation, attributes, events and fragments.
 - URL parsing, document base URL and navigation lifecycle.
-- Fragment navigation, link targets and error pages.
+- Parser fuzzing and WPT parser tests.
 
-## 0.0.5 — CSS style system
-- Token-based CSS parsing and error recovery.
-- Selector matching, specificity, cascade order and inheritance.
-- Computed/used values and stylesheet loading.
-- Media queries and viewport changes.
-- CSS conformance coverage.
-
-## 0.0.6 — Layout and rendering
-- Inline formatting contexts, line boxes and font shaping.
-- Box model and intrinsic sizing.
-- Flexbox, then grid.
+## 0.0.6 — CSS, layout and rendering
+- Token-based CSS parser, selector matching, cascade, inheritance and computed values.
+- Inline formatting, line boxes, font shaping and fallback.
+- Box model, intrinsic sizing, flexbox and grid.
 - Positioning, overflow, stacking contexts and scrolling.
-- Retained display lists, invalidation and GPU compositing.
-- Pixel/reftest comparisons.
+- Image decoding, SVG, retained paint lists and GPU compositing.
+- Pixel/reftest comparisons and viewport matrices.
 
-## 0.0.7 — JavaScript and Web APIs
-- Make an explicit language-runtime decision.
-- Define DOM bindings and browser event-loop semantics.
-- Implement events, timers, fetch, URL, storage and other APIs incrementally.
-- Test JavaScript with Test262 and browser APIs with WPT.
+## 0.0.7 — JavaScript and modern web APIs
+- Choose and integrate a standalone JavaScript runtime or develop LucidScript.
+- Define realms, host bindings and event-loop semantics.
+- DOM integration, events, timers, promises, fetch, storage, workers and WebAssembly.
+- Media, WebSockets, WebRTC and service-worker APIs incrementally.
+- Use ECMAScript Test262 and WPT to measure compatibility.
 
-## 0.0.8 — Networking and security
-- HTTP cache, cookies and content decoding.
+## 0.0.8 — Networking, privacy and security
+- HTTP cache, cookies, TLS, HTTP/2 and HTTP/3.
 - Origin model, CSP, CORS, mixed-content and certificate behavior.
-- Permissions and downloads.
+- Resource-level ad/tracker blocking with filter-list parsing.
+- Permission manager, secure downloads and private browsing.
 - Multi-process renderer, sandboxing, IPC validation and site isolation.
 - Threat model, fuzzing, dependency review and external security review.
 
-## 0.0.9 — Browser capabilities
-- Profiles, session restore, bookmarks, history and downloads.
-- Extension API and isolated extension process architecture.
-- Native ad/tracker filter engine.
-- Media pipeline, accessibility, keyboard support and developer tools.
-- Performance monitoring and privacy dashboard.
+## 0.0.9 — Extensions, mods and ecosystem
+- Sandboxed extension API, permission model and signed packages.
+- Documented WebExtensions-compatible subset and extension conformance tests.
+- Permissioned mod packs, signing, rollback and safe installation.
+- Media/session integration, accessibility tree, developer tools and diagnostics.
+- True per-site CPU/RAM budgets after renderer isolation exists.
 
-## 1.0 — Release requirements
+## 1.0 — Release gates
 
-No 1.0 release until the engine demonstrates broad standards conformance, reliable rendering of representative modern websites, JavaScript and media support, accessibility, security isolation, crash recovery, update strategy, repeatable performance benchmarks and a public vulnerability-reporting process.
+No 1.0 release until broad web standards conformance, representative modern-site compatibility, JavaScript and media support, accessibility, site isolation, crash recovery, secure update infrastructure, reproducible benchmarks and a vulnerability response process have been demonstrated.
