@@ -290,7 +290,9 @@ impl LucidApp {
 
     fn close_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
+            let closed_tab_id = self.tabs[index].id;
             self.tabs.remove(index);
+            self.image_textures.retain(|(tab_id, _), _| *tab_id != closed_tab_id);
         }
         if let Some((active_index, _)) = self.tabs.iter().enumerate().find(|(_, tab)| tab.workspace == self.active_workspace) {
             self.active_tab = active_index;
@@ -332,6 +334,7 @@ impl LucidApp {
             (tab.id, tab.request_generation)
         };
 
+        self.image_textures.retain(|(image_tab_id, _), _| *image_tab_id != tab_id);
         self.address = url.clone();
         self.close_panels();
 
@@ -366,6 +369,7 @@ impl LucidApp {
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 BrowserEvent::PageLoaded { tab_id, generation, page } => {
+                    let is_active_tab = self.tabs.get(self.active_tab).is_some_and(|tab| tab.id == tab_id);
                     let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else { continue };
                     if tab.request_generation != generation { continue; }
                     tab.title = page.title.clone();
@@ -386,8 +390,10 @@ impl LucidApp {
                     }
                     tab.page = Some(page.clone());
                     self.profile.add_history(page.title.clone(), page.url.clone());
-                    self.address = page.url.clone();
-                    self.status = format!("Rendered by Lucid Engine · {} image(s)", page.images.len());
+                    if is_active_tab {
+                        self.address = page.url.clone();
+                        self.status = format!("Rendered by Lucid Engine · {} image(s)", page.images.len());
+                    }
                 }
                 BrowserEvent::NavigationFailed { tab_id, generation, message } => {
                     let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else { continue };
