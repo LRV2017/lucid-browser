@@ -561,7 +561,6 @@ impl LucidApp {
         ui.horizontal(|ui| {
             let mut close_index = None;
             let mut set_pin: Option<(usize, bool)> = None;
-            let mut restore_url = None;
             let mut indices: Vec<usize> = self.tabs.iter().enumerate()
                 .filter(|(_, tab)| tab.workspace == self.active_workspace)
                 .map(|(index, _)| index).collect();
@@ -579,9 +578,6 @@ impl LucidApp {
                 if response.clicked() {
                     self.active_tab = index;
                     self.address = self.tabs[index].url.clone();
-                    if self.tabs[index].page.is_none() && self.tabs[index].url != "lucid://home" {
-                        restore_url = Some(self.tabs[index].url.clone());
-                    }
                 }
                 response.context_menu(|ui| {
                     if ui.button(if tab.pinned { "Unpin tab" } else { "Pin tab" }).clicked() {
@@ -599,7 +595,6 @@ impl LucidApp {
             }
             if let Some((index, pinned)) = set_pin { self.tabs[index].pinned = pinned; }
             if let Some(index) = close_index { self.close_tab(index); }
-            if let Some(url) = restore_url { self.navigate(&url, ui.ctx().clone(), false); }
             if ui.add(egui::Button::new(RichText::new("＋").size(18.0).color(palette.accent)).fill(palette.surface).corner_radius(9)).clicked() {
                 self.new_tab();
             }
@@ -1068,8 +1063,9 @@ impl LucidApp {
 }
 
 impl eframe::App for LucidApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.poll_loads();
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.webview_rect = None;
+        self.poll_loads(ui.ctx().clone());
         self.poll_downloads();
         if !self.session_restore_started {
             self.session_restore_started = true;
