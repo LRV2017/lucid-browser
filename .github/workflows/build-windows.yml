@@ -44,7 +44,7 @@ jobs:
           Compress-Archive -Path dist/* -DestinationPath Lucid-Browser-Windows-x64.zip -Force
 
       - name: Upload Windows executable and ZIP
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Lucid-Browser-Windows-x64
           path: |
