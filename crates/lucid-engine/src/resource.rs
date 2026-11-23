@@ -185,7 +185,7 @@ pub fn discover_css_resources(css: &str, base: &Url) -> Vec<ResourceReference> {
         let start = cursor + relative + "@import".len();
         let rest = css[start..].trim_start();
         if !rest.to_ascii_lowercase().starts_with("url(") {
-            let raw = rest.split([';', ' ', '\\n', '\\r', '\\t'])
+            let raw = rest.split([';', ' ', '\n', '\r', '\t'])
                 .next().unwrap_or("").trim_matches('"').trim_matches('\'');
             push_css_reference(raw, base, &mut output);
         }
