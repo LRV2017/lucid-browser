@@ -18,7 +18,7 @@ Lucid will process hostile network content. Security is a foundational requireme
 
 ## Current prototype limitations
 
-The current prototype does not fetch remote pages, execute scripts, access local files through page content, or provide a secure browsing environment. It is a native UI shell and engine research project. Do not use it for sensitive browsing.
+Normal HTTP/HTTPS tabs are rendered by the embedded WebView2 runtime. Lucid's independent engine now has an initial bounded HTTP(S) resource-loader module that can resolve and fetch referenced resources, but it is not yet connected to the visible page pipeline. The independent engine still does not execute page JavaScript, decode images/fonts/video, or provide a secure browsing environment. WebView2's platform security does not replace a security review of Lucid's own navigation, permissions, downloads, profile handling and process boundaries. Do not use experimental builds for sensitive browsing.
 
 ## Security reporting
 
