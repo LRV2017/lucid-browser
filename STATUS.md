@@ -1,47 +1,51 @@
-# Project Status — 0.0.3 Experimental
+# Project Status — 0.0.4 Experimental
 
-Lucid is an independent browser-engine research project and native desktop application.
+Lucid is a Windows desktop browser shell with two distinct page-rendering paths.
 
-## Implemented in the 0.0.3 UI and service layer
+## Live website rendering
+
+- Normal HTTP/HTTPS tabs are hosted in Wry child WebViews backed by the Microsoft Edge WebView2 Runtime (Chromium).
+- Each tab retains its own WebView while inactive views are hidden; views share the named Lucid WebView2 profile.
+- The live web platform handles HTML, CSS, JavaScript, images, fonts, SVG, canvas, audio/video, iframes, subresources, cookies, storage and normal browser networking.
+- New-window requests are routed to new Lucid tabs.
+- Navigation and document-title events synchronize tab labels, address state and browsing history.
+- DevTools and the WebView2 browser-extension capability are enabled.
+
+This is not Google Chrome itself. It uses Microsoft's Chromium-based Edge WebView2 runtime, whose exact version and behavior can differ from a user's Chrome installation. The current Lucid extension UX is not a complete Chrome Web Store or Firefox XPI implementation.
+
+## Lucid-owned user interface and services
 
 - Native desktop UI with Lucid Calm and Lucid Cyberpunk.
-- Persistent user profile with theme/accent, workspaces, bookmarks, browsing history, quick links, tab session metadata and preferences.
-- Tabs, workspace switching, back/forward, address/search entry and command palette.
+- Persistent profile with theme/accent, workspaces, bookmarks, browsing history, quick links, tab session metadata and preferences.
+- Tabs, workspace switching, address/search entry, command palette and keyboard shortcuts.
 - Pinned tabs and manual background-tab sleeping.
-- Library and history panels.
+- Library, history, settings and downloads panels.
 - GX-style Control Center with live main-process CPU/RAM and system memory summary.
-- Per-top-level-HTML-navigation bandwidth governor.
-- First-party top-level host navigation protection list.
-- Accent/theme Mod Center and reduced-motion preference.
-- Gaming shortcut hub (not a live news/deals feed).
-- Direct HTTP/HTTPS download queue (512 MiB per-file cap).
-- Basic anchor href hit-testing and relative URL navigation.
-- GitHub Actions Windows build and portable ZIP artifact.
+- Gaming shortcut hub.
+- Windows build and portable ZIP through GitHub Actions.
 
-## Engine behavior implemented
+Some power features are still prototypes: Lucid Protect is a small top-level host list, not a page-request filter; Memory Saver closes a hidden tab's WebView and reloads it when revisited; and Lucid Corner shortcuts are not a live news/deals feed.
+
+## Original Lucid Engine
 
 - Lucid-owned HTML tokenizer and small tree builder.
-- Raw-text preservation for style/script; scripts remain inert.
 - Basic CSS selector/declaration parsing and a small cascade.
-- Simple top-to-bottom block layout and paint operations.
-- HTTP/HTTPS HTML fetch with bounded document size; arbitrary local-file URL access is disabled.
-- Per-tab navigation generation tracking to discard stale responses.
+- Simple vertical block layout and paint operations.
+- Scripts are retained as inert text; no JavaScript runtime or DOM host bindings.
+- Used by `lucid://demo`, not the main renderer for arbitrary websites.
+
+## Runtime requirement
+
+The Windows app requires the Microsoft Edge WebView2 Runtime. It is included with Windows 11 on most devices; users on systems without it must install Microsoft's Evergreen Runtime. The GitHub artifact does not bundle the Fixed Version runtime.
 
 ## Explicit limitations
 
-- No JavaScript execution or DOM host bindings.
-- Not full WHATWG HTML parsing or complete CSS support.
-- No inline formatting, correct line boxes, flexbox, grid, floats, standards-compliant positioning, full text shaping or compositing.
-- No images, SVG, canvas, audio/video, WebAssembly, workers, service workers or subresource loading.
-- No cookies, storage model, CSP, CORS, complete origin model or certificate UI.
-- No site isolation, renderer sandbox, multi-process architecture, per-tab process accounting or independent security audit.
-- Lucid Protect only matches a small top-level hostname list, not page requests or filter-list syntax.
-- Network governor limits each top-level HTML transfer, not all browser traffic.
-- Memory Saver releases this prototype's in-memory document object; it does not suspend a renderer process.
-- Mod Center changes themes/accents/motion, not third-party executable mods.
-- GX Corner is a shortcut page, not live curated gaming content.
-- Download manager supports direct HTTP/HTTPS file URLs, not browser download interception, pause/resume or safe-browsing scanning.
-- No third-party extensions or Chrome/Firefox WebExtensions compatibility.
-- No broad modern website compatibility, accessibility tree or screen-reader integration.
+- The browser shell is experimental and has not had an independent security audit.
+- Lucid-specific permissions UX, safe-browsing/download scanning, site-permission management, crash recovery and privacy controls need work.
+- No completed uBlock-style network request interception/filter-list engine.
+- No completed extension manager or verified compatibility with Firefox XPI add-ons.
+- No verified parity with Google Chrome's account, policy, DRM or extension-store behavior.
+- The original Lucid Engine is not a complete HTML/CSS/JavaScript browser engine and is not ready to replace WebView2.
+- Accessibility and screen-reader behavior need dedicated testing.
 
-This build is experimental. Do not use it for sensitive browsing.
+Do not use early builds for sensitive browsing. Every advertised capability must be backed by implementation and tests; a successful build alone does not prove browser compatibility or security.
