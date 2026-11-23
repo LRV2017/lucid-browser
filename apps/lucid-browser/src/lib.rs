@@ -13,12 +13,11 @@ pub unsafe extern "C" fn RunWinMain(
     let args = cef::args::Args::from(main_args);
     let main_args = args.as_main_args();
 
-    if let Err(message) = app::cef_host::initialize_process(main_args, sandbox_info) {
-        eprintln!("{message}");
-        return 0;
+    if let Some(exit_code) = app::cef_host::execute_subprocess(main_args, sandbox_info) {
+        return exit_code;
     }
 
-    match app::run_lucid(main_args, sandbox_info) {
+    match app::run_lucid(instance as isize, sandbox_info as usize) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("Lucid exited with an error: {error}");
