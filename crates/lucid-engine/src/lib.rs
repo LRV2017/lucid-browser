@@ -443,6 +443,7 @@ fn collect_text(nodes: &[Node], output: &mut String) {
 pub enum PaintOp {
     Rect { x: f32, y: f32, width: f32, height: f32, color: Color, radius: f32 },
     Text { x: f32, y: f32, text: String, size: f32, color: Color, bold: bool, italic: bool, href: Option<String> },
+    Image { x: f32, y: f32, width: f32, height: f32, src: String, alt: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -499,9 +500,12 @@ fn layout_nodes(nodes: &[Node], sheet: &Stylesheet, x: f32, y: &mut f32, width: 
                 if element.tag == "a" { child_style.color = Some("#7650BD".to_owned()); }
                 layout_nodes(&element.children, sheet, child_x, y, child_width, ops, child_style);
                 if element.tag == "img" {
-                    let alt = element.attr("alt").unwrap_or("Image");
-                    ops.push(PaintOp::Text { x: child_x, y: *y, text: format!("[ {alt} ]"), size: 13.0, color: Color::MUTED, bold: false, italic: true, href: None });
-                    *y += 24.0;
+                    let src = element.attr("src").unwrap_or("").to_owned();
+                    let alt = element.attr("alt").unwrap_or("Image").to_owned();
+                    let image_width = element.attr("width").and_then(parse_dimension).unwrap_or(width.min(420.0)).clamp(24.0, width.max(24.0));
+                    let image_height = element.attr("height").and_then(parse_dimension).unwrap_or(image_width * 0.58).clamp(24.0, 900.0);
+                    ops.push(PaintOp::Image { x: child_x, y: *y, width: image_width, height: image_height, src, alt });
+                    *y += image_height;
                 }
                 *y += pad;
                 if *y == before + pad { *y += 20.0; }
@@ -509,6 +513,10 @@ fn layout_nodes(nodes: &[Node], sheet: &Stylesheet, x: f32, y: &mut f32, width: 
             }
         }
     }
+}
+
+fn parse_dimension(value: &str) -> Option<f32> {
+    value.trim_end_matches("px").trim().parse::<f32>().ok().filter(|value| value.is_finite() && *value > 0.0)
 }
 
 fn estimate_text_height(nodes: &[Node], width: f32, font_size: f32) -> f32 {
