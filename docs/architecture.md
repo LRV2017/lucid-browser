@@ -81,7 +81,7 @@ Lucid DOM
 
 This is not the WHATWG HTML parser, a complete CSS implementation, or a JavaScript runtime.
 
-## Navigation and security considerations
+## Independent engine resource pipeline (first implementation step)\n\n`crates/lucid-engine/src/resource.rs` introduces a Lucid-owned HTTP(S) resource loader with redirect limits, timeouts, a per-resource byte cap and URL-scheme checks. It can discover common stylesheet, script, image, font-preload, video, audio, track and object references from the current HTML tree. This is a foundation only: it is not yet wired into the visible `lucid://demo` rendering loop or normal browser navigation, and it does not parse or execute those resources. CSS parsing/cascade, font decoding/shaping, JavaScript execution, image decoding, media decoding and compositing remain separate engine milestones.\n\n## Navigation and security considerations
 
 WebView2 handles normal page navigation and subresource loading. Lucid's existing top-level hostname list does not filter all network requests, and the former HTML-download bandwidth limiter does not control WebView2 page traffic. These must not be advertised as full request-level ad blocking or total bandwidth governance.
 
