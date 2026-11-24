@@ -21,5 +21,6 @@ sysinfo = "0.40.4"
 cef = { version = "156.7.0", default-features = false, features = ["sandbox", "resources"] }
 cef-dll-sys = { version = "156.7.0", features = ["sandbox"] }
 raw-window-handle = "0.6.2"
+windows = { version = "0.62.2", features = ["Win32_Foundation"] }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
