@@ -148,7 +148,7 @@ struct LucidApp {
     #[cfg(target_os = "windows")]
     parent_hwnd: Option<isize>,
     #[cfg(target_os = "windows")]
-    cef_app: Option<cef_host::LucidCefApp>,
+    cef_app: Option<cef::App>,
     status: String,
     show_library: bool,
     show_settings: bool,
@@ -1460,7 +1460,7 @@ fn fetch_document(url: &str, protection_enabled: bool, network_limit_kib: u32) -
 }
 
 #[cfg(target_os = "windows")]
-pub fn run_lucid(instance: isize, sandbox_info: usize) -> eframe::Result {
+pub fn run_lucid(instance: cef::sys::HINSTANCE, sandbox_info: *mut u8) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Lucid Browser")
