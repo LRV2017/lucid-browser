@@ -11,7 +11,7 @@ mod persistence;
 mod protection;
 
 #[cfg(target_os = "windows")]
-use cef::{ImplBrowser, ImplFrame};
+use cef::{ImplBrowser, ImplBrowserHost, ImplFrame};
 
 use eframe::egui::{self, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, ScrollArea, Sense, Stroke, TextEdit, Vec2};
 use downloads::{DownloadUpdate, run_download};
