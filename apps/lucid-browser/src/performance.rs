@@ -11,7 +11,7 @@ pub struct PerformanceSnapshot {
 }
 
 pub struct PerformanceMonitor {
-    system: System,
+    system: Option<System>,
     pid: Option<sysinfo::Pid>,
     last_refresh: Instant,
     snapshot: PerformanceSnapshot,
@@ -19,13 +19,17 @@ pub struct PerformanceMonitor {
 
 impl PerformanceMonitor {
     pub fn new() -> Self {
-        let mut system = System::new_all();
+        // System::new_all is fallible on unsupported or restricted platforms.
+        // Keep the monitor available even when the OS metrics backend cannot start.
+        let mut system = System::new_all().ok();
         let pid = get_current_pid().ok();
-        if let Some(pid) = pid {
+        if let (Some(system), Some(pid)) = (system.as_mut(), pid) {
             let pids = [pid];
             system.refresh_processes(ProcessesToUpdate::Some(&pids), true);
         }
-        system.refresh_memory();
+        if let Some(system) = system.as_mut() {
+            system.refresh_memory();
+        }
         Self {
             system,
             pid,
@@ -36,17 +40,19 @@ impl PerformanceMonitor {
 
     pub fn snapshot(&mut self) -> PerformanceSnapshot {
         if self.last_refresh.elapsed() >= Duration::from_millis(900) {
-            self.system.refresh_memory();
-            if let Some(pid) = self.pid {
-                let pids = [pid];
-                self.system.refresh_processes(ProcessesToUpdate::Some(&pids), true);
-                if let Some(process) = self.system.process(pid) {
-                    self.snapshot.browser_cpu_percent = process.cpu_usage();
-                    self.snapshot.browser_memory_bytes = process.memory();
+            if let Some(system) = self.system.as_mut() {
+                system.refresh_memory();
+                if let Some(pid) = self.pid {
+                    let pids = [pid];
+                    system.refresh_processes(ProcessesToUpdate::Some(&pids), true);
+                    if let Some(process) = system.process(pid) {
+                        self.snapshot.browser_cpu_percent = process.cpu_usage();
+                        self.snapshot.browser_memory_bytes = process.memory();
+                    }
                 }
+                self.snapshot.system_memory_used_bytes = system.used_memory();
+                self.snapshot.system_memory_total_bytes = system.total_memory();
             }
-            self.snapshot.system_memory_used_bytes = self.system.used_memory();
-            self.snapshot.system_memory_total_bytes = self.system.total_memory();
             self.last_refresh = Instant::now();
         }
         self.snapshot
