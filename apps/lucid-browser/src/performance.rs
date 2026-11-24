@@ -19,7 +19,7 @@ pub struct PerformanceMonitor {
 
 impl PerformanceMonitor {
     pub fn new() -> Self {
-        let mut system = System::new_all();
+        let mut system = System::new_all().unwrap_or_default();
         let pid = get_current_pid().ok();
         if let Some(pid) = pid {
             let pids = [pid];
