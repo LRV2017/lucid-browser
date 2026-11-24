@@ -1,10 +1,17 @@
+#[path = "downloads.rs"]
 mod downloads;
 #[cfg(target_os = "windows")]
 #[path = "cef_host.rs"]
 pub(crate) mod cef_host;
+#[path = "performance.rs"]
 mod performance;
+#[path = "persistence.rs"]
 mod persistence;
+#[path = "protection.rs"]
 mod protection;
+
+#[cfg(target_os = "windows")]
+use cef::{ImplBrowser, ImplFrame};
 
 use eframe::egui::{self, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, ScrollArea, Sense, Stroke, TextEdit, Vec2};
 use downloads::{DownloadUpdate, run_download};
@@ -1462,8 +1469,8 @@ pub fn run_lucid(instance: isize, sandbox_info: usize) -> eframe::Result {
         ..Default::default()
     };
     let result = eframe::run_native("Lucid Browser", options, Box::new(move |cc| {
-        let main_args = cef::MainArgs { instance: instance as _ };
-        LucidApp::new(cc, &main_args, sandbox_info as *mut u8)
+        let main_args = cef::MainArgs { instance };
+        LucidApp::new(cc, &main_args, sandbox_info)
             .map(|app| Box::new(app) as Box<dyn eframe::App>)
             .map_err(|message| Box::new(std::io::Error::other(message)) as Box<dyn std::error::Error + Send + Sync>)
     }));
