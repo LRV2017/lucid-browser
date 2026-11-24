@@ -47,38 +47,29 @@ jobs:
       - name: Build Lucid Chromium client and launcher
         run: cargo build --release --package lucid-browser
 
+      - name: Bundle portable Chromium runtime
+        run: cargo run --release --package lucid-browser --bin package-cef -- dist
+
       - name: Verify Chromium runtime and sandbox bootstrap
         shell: pwsh
         run: |
           $required = @(
-            "target/release/bootstrap.exe",
-            "target/release/lucid_browser.dll",
-            "target/release/libcef.dll",
-            "target/release/icudtl.dat",
-            "target/release/resources.pak",
-            "target/release/locales"
+            "dist/lucid_browser.exe",
+            "dist/lucid_browser.dll",
+            "dist/libcef.dll",
+            "dist/icudtl.dat",
+            "dist/resources.pak",
+            "dist/locales"
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path)) {
-              throw "Required Chromium runtime file is missing: $path"
+              throw "Required packaged Chromium runtime file is missing: $path"
             }
           }
 
       - name: Prepare portable Chromium browser ZIP
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-
-          # CEF M138+ uses its bootstrap executable to load the sandboxed client DLL.
-          Copy-Item target/release/bootstrap.exe dist/lucid_browser.exe
-          Copy-Item target/release/lucid_browser.dll dist/lucid_browser.dll
-
-          # Include the CEF/Chromium runtime libraries and data packs beside the bootstrap.
-          Get-ChildItem target/release -File |
-            Where-Object { $_.Extension -in @(".dll", ".pak", ".dat", ".bin") } |
-            ForEach-Object { Copy-Item $_.FullName dist/ -Force }
-
-          Copy-Item target/release/locales dist/locales -Recurse -Force
           Copy-Item README.md dist/README.txt
           Copy-Item LICENSE dist/LICENSE.txt
           Copy-Item THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_NOTICES.txt
