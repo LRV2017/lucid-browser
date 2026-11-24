@@ -17,7 +17,7 @@ pub unsafe extern "C" fn RunWinMain(
         return exit_code;
     }
 
-    match app::run_lucid(instance as isize, sandbox_info as usize) {
+    match app::run_lucid(instance, sandbox_info) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("Lucid exited with an error: {error}");
