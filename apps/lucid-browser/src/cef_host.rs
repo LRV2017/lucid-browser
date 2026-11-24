@@ -1,10 +1,14 @@
 #![cfg(target_os = "windows")]
 
 use std::path::PathBuf;
+use std::ffi::c_void;
+
+use eframe::egui;
+use windows::Win32::Foundation::HWND;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
-use cef::*;
+use cef::{*, ImplBrowser};
 use super::BrowserEvent;
 
 #[derive(Clone)]
@@ -101,7 +105,7 @@ pub fn initialize(
     context: egui::Context,
     main_args: &MainArgs,
     sandbox_info: *mut u8,
-) -> Result<LucidCefApp, String> {
+) -> Result<App, String> {
     let app_data = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .ok_or_else(|| "Windows did not provide an APPDATA directory for the Chromium profile.".to_owned())?;
@@ -115,9 +119,8 @@ pub fn initialize(
     settings.root_cache_path = CefString::from(root.to_string_lossy().as_ref());
     settings.cache_path = CefString::from(profile.to_string_lossy().as_ref());
     settings.persist_session_cookies = 1;
-    settings.persist_user_preferences = 1;
 
-    let mut app = LucidCefApp::new(context);
+    let mut app: App = LucidCefApp::new(context);
     let initialized = cef::initialize(
         Some(main_args),
         Some(&settings),
@@ -141,7 +144,7 @@ pub fn create_browser(
         width: 1,
         height: 1,
     };
-    let window_info = WindowInfo::default().set_as_child(parent_hwnd as _, &bounds);
+    let window_info = WindowInfo::default().set_as_child(HWND(parent_hwnd as *mut c_void), &bounds);
     let browser_settings = BrowserSettings::default();
     let mut client = LucidClient::new(callbacks);
     let cef_url = CefString::from(url);
