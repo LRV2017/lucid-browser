@@ -4,8 +4,10 @@ use std::path::PathBuf;
 use eframe::egui;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
+use std::sync::Arc;
 
-use cef::{*, ImplBrowser};
+use cef::{*, ImplBrowser, ImplRequest};
+use super::adblock::AdBlockService;
 use super::BrowserEvent;
 
 #[derive(Clone)]
@@ -13,6 +15,7 @@ pub struct CefCallbacks {
     pub tab_id: u64,
     pub sender: Sender<BrowserEvent>,
     pub context: egui::Context,
+    pub adblocker: AdBlockService,
 }
 
 wrap_display_handler! {
@@ -63,6 +66,79 @@ wrap_client! {
     impl Client {
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(LucidDisplayHandler::new(self.callbacks.clone()))
+        }
+
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(LucidRequestHandler::new(self.callbacks.adblocker.clone()))
+        }
+    }
+}
+
+wrap_request_handler! {
+    pub struct LucidRequestHandler {
+        adblocker: AdBlockService,
+    }
+
+    impl RequestHandler {
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _request: Option<&mut Request>,
+            _is_navigation: i32,
+            _is_download: i32,
+            request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut i32>,
+        ) -> Option<ResourceRequestHandler> {
+            Some(LucidResourceRequestHandler::new(
+                self.adblocker.clone(),
+                request_initiator.map(|value| value.to_string()).unwrap_or_default(),
+            ))
+        }
+    }
+}
+
+wrap_resource_request_handler! {
+    pub struct LucidResourceRequestHandler {
+        adblocker: AdBlockService,
+        source_url: String,
+    }
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            let Some(request) = request else {
+                return ReturnValue::RV_CONTINUE;
+            };
+
+            let url = request.url().to_string();
+            let method = request.method().to_string();
+            let cef_type = format!("{:?}", request.resource_type());
+            let request_type = match cef_type.as_str() {
+                "RT_MAIN_FRAME" | "RT_NAVIGATION_PRELOAD_MAIN_FRAME" => "main_frame",
+                "RT_SUB_FRAME" | "RT_NAVIGATION_PRELOAD_SUB_FRAME" => "sub_frame",
+                "RT_STYLESHEET" => "stylesheet",
+                "RT_SCRIPT" | "RT_WORKER" | "RT_SHARED_WORKER" | "RT_SERVICE_WORKER" => "script",
+                "RT_IMAGE" | "RT_FAVICON" => "image",
+                "RT_FONT_RESOURCE" => "font",
+                "RT_MEDIA" => "media",
+                "RT_OBJECT" | "RT_PLUGIN_RESOURCE" => "object",
+                "RT_XHR" => "xhr",
+                "RT_PING" => "ping",
+                "RT_CSP_REPORT" => "csp_report",
+                _ => "other",
+            };
+
+            if self.adblocker.should_block(&url, &self.source_url, request_type, &method) {
+                ReturnValue::RV_CANCEL
+            } else {
+                ReturnValue::RV_CONTINUE
+            }
         }
     }
 }

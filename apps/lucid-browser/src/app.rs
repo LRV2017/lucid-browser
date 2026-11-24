@@ -1,3 +1,5 @@
+#[path = "adblock.rs"]
+mod adblock;
 #[path = "downloads.rs"]
 mod downloads;
 #[cfg(target_os = "windows")]
@@ -23,6 +25,7 @@ use lucid_engine::{Document, Node, PaintOp, Stylesheet, collect_styles, document
 use lucid_engine::resource::{ResourceKind, ResourceLoader, discover_document_resources, load_document_stylesheets};
 use std::io::Read;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -166,6 +169,7 @@ struct LucidApp {
     workspace_name_input: String,
     bookmarks_bar: bool,
     profile: BrowserProfile,
+    adblocker: adblock::AdBlockService,
     performance: PerformanceMonitor,
     session_restore_started: bool,
     last_persist: Instant,
@@ -212,6 +216,7 @@ impl Default for LucidApp {
             show_find: false, find_query: String::new(), find_focus: false,
             active_workspace, workspace_name_input: String::new(),
             bookmarks_bar: profile.bookmarks_bar, profile,
+            adblocker: adblock::AdBlockService::new(),
             performance: PerformanceMonitor::new(),
             session_restore_started: false, last_persist: Instant::now() - Duration::from_secs(5),
             download_input: String::new(), download_tx, download_rx, downloads: Vec::new(), next_download_id: 1,
@@ -381,20 +386,38 @@ impl LucidApp {
     }
 
     fn close_tab(&mut self, index: usize) {
-        if index < self.tabs.len() {
-            let closed_tab = self.tabs.remove(index);
-            self.image_textures.retain(|(tab_id, _), _| *tab_id != closed_tab.id);
-            #[cfg(target_os = "windows")]
-            if let Some(browser) = closed_tab.cef_browser {
-                if let Some(host) = browser.host() { host.close_browser(0); }
+        if index >= self.tabs.len() { return; }
+
+        let previously_active_id = self.tabs.get(self.active_tab).map(|tab| tab.id);
+        let closed_tab = self.tabs.remove(index);
+        self.image_textures.retain(|(tab_id, _), _| *tab_id != closed_tab.id);
+
+        #[cfg(target_os = "windows")]
+        if let Some(browser) = closed_tab.cef_browser {
+            if let Some(host) = browser.host() { host.close_browser(0); }
+        }
+
+        if previously_active_id != Some(closed_tab.id) {
+            if let Some(active_index) = previously_active_id
+                .and_then(|active_id| self.tabs.iter().position(|tab| tab.id == active_id))
+            {
+                self.active_tab = active_index;
+                self.address = self.active().url.clone();
+                return;
             }
         }
-        if let Some((active_index, _)) = self.tabs.iter().enumerate().find(|(_, tab)| tab.workspace == self.active_workspace) {
+
+        let nearest_tab = self.tabs.iter().enumerate()
+            .filter(|(_, tab)| tab.workspace == self.active_workspace)
+            .min_by_key(|(tab_index, _)| tab_index.abs_diff(index))
+            .map(|(tab_index, _)| tab_index);
+
+        if let Some(active_index) = nearest_tab {
             self.active_tab = active_index;
+            self.address = self.active().url.clone();
         } else {
             self.new_tab();
         }
-        self.address = self.active().url.clone();
     }
 
     fn switch_workspace(&mut self, workspace: &str) {
@@ -465,6 +488,7 @@ impl LucidApp {
                         tab_id,
                         sender: self.tx.clone(),
                         context: ctx.clone(),
+                        adblocker: self.adblocker.clone(),
                     };
                     match cef_host::create_browser(parent_hwnd, callbacks, &url) {
                         Ok(hosted) => {
@@ -620,7 +644,7 @@ impl LucidApp {
             ui.label(RichText::new("◈").size(19.0).strong().color(palette.accent));
             ui.label(RichText::new("Lucid").size(18.0).strong().color(palette.text));
             ui.add_space(6.0);
-            ui.label(RichText::new("NATIVE ENGINE").size(9.0).monospace().color(palette.muted));
+            ui.label(RichText::new("CHROMIUM ENGINE").size(9.0).monospace().color(palette.muted));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.menu_button(RichText::new("⋯").size(18.0).color(palette.muted), |ui| {
                     for (label, panel) in [
@@ -674,6 +698,12 @@ impl LucidApp {
                         ui.close();
                     }
                 });
+                if ui.small_button(RichText::new("×").color(if selected { palette.text } else { palette.muted }))
+                    .on_hover_text("Close tab")
+                    .clicked()
+                {
+                    close_index = Some(index);
+                }
             }
             if let Some((index, pinned)) = set_pin { self.tabs[index].pinned = pinned; }
             if let Some(index) = close_index { self.close_tab(index); }
@@ -703,15 +733,28 @@ impl LucidApp {
                 let target = self.active().url.clone();
                 self.navigate(&target, ctx.clone(), false);
             }
-            let address_width = (ui.available_width() - 104.0).max(160.0);
+            let focus_address = ui.input(|i| i.key_pressed(egui::Key::L) && i.modifiers.ctrl);
+            let address_width = (ui.available_width() - 158.0).max(120.0);
             let address = ui.add_sized([address_width, 36.0],
                 TextEdit::singleline(&mut self.address)
                     .id(egui::Id::new("lucid-address-bar"))
                     .hint_text("Search or enter an address")
                     .desired_width(f32::INFINITY)
                     .margin(Vec2::new(12.0, 8.0)));
-            if address.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.navigate(&self.address.clone(), ctx.clone(), true);
+            if focus_address { address.request_focus(); }
+
+            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let go_clicked = ui.add_sized([44.0, 36.0],
+                egui::Button::new(RichText::new("Go").color(palette.text))
+                    .fill(palette.surface_raised)
+                    .corner_radius(9))
+                .on_hover_text("Open address or search")
+                .clicked();
+            if go_clicked || (enter_pressed && (address.has_focus() || address.lost_focus())) {
+                let target = self.address.trim().to_owned();
+                if !target.is_empty() {
+                    self.navigate(&target, ctx.clone(), true);
+                }
             }
             let bookmarked = self.profile.is_bookmarked(&self.active().url);
             if ui.add(egui::Button::new(RichText::new(if bookmarked { "★" } else { "☆" }).color(palette.accent))
@@ -1120,10 +1163,20 @@ impl LucidApp {
         ui.checkbox(&mut self.profile.navigation_protection, "Enable Lucid Protect navigation filter");
         ui.checkbox(&mut self.profile.animations_enabled, "Enable interface animations");
         ui.add_space(16.0);
+        ui.label(RichText::new("BUILT-IN AD AND TRACKER BLOCKING").size(10.0).strong().color(palette.muted));
+        let mut adblocking_enabled = self.adblocker.is_enabled();
+        if ui.checkbox(&mut adblocking_enabled, "Block ads and tracking requests").changed() {
+            self.adblocker.set_enabled(adblocking_enabled);
+        }
+        ui.label(RichText::new(format!("{} network requests blocked this session", self.adblocker.blocked_count()))
+            .size(11.0).color(palette.good));
+        ui.label(RichText::new("Uses EasyList, EasyPrivacy and uBlock-compatible network filters. Cosmetic hiding and scriptlet injection are not enabled yet.")
+            .size(11.0).color(palette.muted));
+        ui.add_space(16.0);
         ui.label(RichText::new("ENGINE STATUS").size(10.0).strong().color(palette.muted));
         ui.label(RichText::new("Chromium Embedded Framework · Blink / V8").color(palette.text));
         ui.label(RichText::new("Modern website rendering through CEF; Lucid retains its own browser chrome and tab system.").size(11.0).color(palette.muted));
-        ui.label(RichText::new("CEF runtime packaging, page compatibility, permissions and browser security still require verification.").size(11.0).color(palette.muted));
+        ui.label(RichText::new("CEF supplies Chromium-class website rendering. It is not the WebView2 host API, and full Firefox add-on runtime support is not included.").size(11.0).color(palette.muted));
         ui.add_space(12.0);
         if ui.button("Save settings now").clicked() { self.persist_profile(); }
     }
