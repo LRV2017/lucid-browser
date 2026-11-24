@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use eframe::egui;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
+use std::ffi::c_void;
+use windows::Win32::Foundation::HWND;
 
 use cef::{*, ImplBrowser};
 use super::BrowserEvent;
@@ -141,7 +143,7 @@ pub fn create_browser(
         width: 1,
         height: 1,
     };
-    let window_info = WindowInfo::default().set_as_child(parent_hwnd as cef::sys::cef_window_handle_t, &bounds);
+    let window_info = WindowInfo::default().set_as_child(HWND(parent_hwnd as *mut c_void), &bounds);
     let browser_settings = BrowserSettings::default();
     let mut client = LucidClient::new(callbacks);
     let cef_url = CefString::from(url);
