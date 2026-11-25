@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use eframe::egui;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
-use std::sync::Arc;
 
 use cef::{*, ImplBrowser, ImplRequest};
 use super::adblock::AdBlockService;
@@ -113,11 +112,16 @@ wrap_resource_request_handler! {
             _callback: Option<&mut Callback>,
         ) -> ReturnValue {
             let Some(request) = request else {
-                return ReturnValue::RV_CONTINUE;
+                return ReturnValue::CONTINUE;
             };
 
-            let url = request.url().to_string();
-            let method = request.method().to_string();
+            let cef_url = request.url();
+            let utf16_url = CefStringUtf16::from(&cef_url);
+            let url = CefStringUtf8::from(&utf16_url).to_string();
+
+            let cef_method = request.method();
+            let utf16_method = CefStringUtf16::from(&cef_method);
+            let method = CefStringUtf8::from(&utf16_method).to_string();
             let cef_type = format!("{:?}", request.resource_type());
             let request_type = match cef_type.as_str() {
                 "RT_MAIN_FRAME" | "RT_NAVIGATION_PRELOAD_MAIN_FRAME" => "main_frame",
@@ -135,9 +139,9 @@ wrap_resource_request_handler! {
             };
 
             if self.adblocker.should_block(&url, &self.source_url, request_type, &method) {
-                ReturnValue::RV_CANCEL
+                ReturnValue::CANCEL
             } else {
-                ReturnValue::RV_CONTINUE
+                ReturnValue::CONTINUE
             }
         }
     }

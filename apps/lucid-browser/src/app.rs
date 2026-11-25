@@ -25,7 +25,6 @@ use lucid_engine::{Document, Node, PaintOp, Stylesheet, collect_styles, document
 use lucid_engine::resource::{ResourceKind, ResourceLoader, discover_document_resources, load_document_stylesheets};
 use std::io::Read;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
