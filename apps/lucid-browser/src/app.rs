@@ -49,15 +49,15 @@ impl Theme {
     fn palette(self) -> Palette {
         match self {
             Theme::Calm => Palette {
-                background: Color32::from_rgb(17, 15, 22),
-                surface: Color32::from_rgb(27, 24, 34),
-                surface_raised: Color32::from_rgb(37, 32, 46),
-                border: Color32::from_rgb(57, 49, 69),
-                text: Color32::from_rgb(244, 240, 250),
-                muted: Color32::from_rgb(164, 155, 180),
-                accent: Color32::from_rgb(183, 153, 236),
-                accent_alt: Color32::from_rgb(132, 113, 181),
-                good: Color32::from_rgb(137, 205, 174),
+                background: Color32::from_rgb(16, 18, 25),
+                surface: Color32::from_rgb(23, 26, 35),
+                surface_raised: Color32::from_rgb(32, 36, 48),
+                border: Color32::from_rgb(48, 54, 69),
+                text: Color32::from_rgb(240, 243, 250),
+                muted: Color32::from_rgb(151, 160, 178),
+                accent: Color32::from_rgb(164, 145, 255),
+                accent_alt: Color32::from_rgb(101, 111, 145),
+                good: Color32::from_rgb(119, 214, 173),
             },
             Theme::Cyberpunk => Palette {
                 background: Color32::from_rgb(8, 9, 14),
@@ -125,6 +125,7 @@ enum BrowserEvent {
     NavigationFailed { tab_id: u64, generation: u64, message: String },
     CefAddressChanged { tab_id: u64, url: String },
     CefTitleChanged { tab_id: u64, title: String },
+    FocusAddressBar,
 }
 
 struct DownloadItem {
@@ -143,6 +144,7 @@ struct LucidApp {
     next_tab_id: u64,
     next_request_generation: u64,
     address: String,
+    address_focus_requested: bool,
     tx: Sender<BrowserEvent>,
     rx: Receiver<BrowserEvent>,
     image_textures: BTreeMap<(u64, String), egui::TextureHandle>,
@@ -201,7 +203,7 @@ impl Default for LucidApp {
 
         Self {
             theme, tabs, active_tab: 0, next_tab_id: 100, next_request_generation: 1,
-            address, tx, rx,
+            address, address_focus_requested: false, tx, rx,
             image_textures: BTreeMap::new(),
             cef_view_rect: None,
             #[cfg(target_os = "windows")]
@@ -560,6 +562,18 @@ impl LucidApp {
                         self.status = "Page ready · Chromium engine".into();
                     }
                 }
+                BrowserEvent::FocusAddressBar => {
+                    self.address_focus_requested = true;
+                    #[cfg(target_os = "windows")]
+                    if let Some(parent_hwnd) = self.parent_hwnd {
+                        use windows_sys::Win32::UI::WindowsAndMessaging::{SetFocus, SetForegroundWindow};
+                        unsafe {
+                            SetForegroundWindow(parent_hwnd as _);
+                            SetFocus(parent_hwnd as _);
+                        }
+                    }
+                    ctx.request_repaint();
+                }
                 BrowserEvent::PageLoaded { tab_id, generation, page } => {
                     let is_active_tab = self.tabs.get(self.active_tab).is_some_and(|tab| tab.id == tab_id);
                     let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else { continue };
@@ -639,134 +653,240 @@ impl LucidApp {
     }
 
     fn draw_header(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("◈").size(19.0).strong().color(palette.accent));
-            ui.label(RichText::new("Lucid").size(18.0).strong().color(palette.text));
-            ui.add_space(6.0);
-            ui.label(RichText::new("CHROMIUM ENGINE").size(9.0).monospace().color(palette.muted));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.menu_button(RichText::new("⋯").size(18.0).color(palette.muted), |ui| {
-                    for (label, panel) in [
-                        ("Library", "library"), ("History", "history"), ("Downloads", "downloads"),
-                        ("Performance", "control"), ("Appearance", "mods"), ("Settings", "settings"),
-                    ] {
-                        if ui.button(label).clicked() { self.open_panel(panel); ui.close(); }
-                    }
+        Frame::new()
+            .fill(palette.surface)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(13)
+            .inner_margin(Margin::same(8))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    Frame::new()
+                        .fill(palette.accent.gamma_multiply(0.18))
+                        .corner_radius(9)
+                        .inner_margin(Margin::same(6))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("◈").size(19.0).strong().color(palette.accent));
+                        });
+                    ui.add_space(2.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Lucid").size(16.0).strong().color(palette.text));
+                        ui.label(RichText::new("BROWSER").size(8.0).monospace().color(palette.muted));
+                    });
+                    ui.add_space(12.0);
                     ui.separator();
-                    if ui.button("Toggle Calm / Cyberpunk").clicked() {
-                        self.theme = if self.theme == Theme::Calm { Theme::Cyberpunk } else { Theme::Calm };
-                        ui.close();
-                    }
-                    if ui.button("Sleep background tabs").clicked() { self.sleep_background_tabs(); ui.close(); }
-                    if ui.button("Command palette  Ctrl+K").clicked() { self.show_command_palette = true; ui.close(); }
+                    ui.add_space(8.0);
+                    egui::ComboBox::from_id_salt("lucid-top-workspace")
+                        .selected_text(RichText::new(&self.active_workspace).size(11.0).color(palette.text))
+                        .width(118.0)
+                        .show_ui(ui, |ui| {
+                            for workspace in self.profile.workspaces.clone() {
+                                if ui.selectable_label(self.active_workspace == workspace, &workspace).clicked() {
+                                    self.switch_workspace(&workspace);
+                                    ui.close();
+                                }
+                            }
+                        });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.menu_button(RichText::new("⋯").size(19.0).color(palette.muted), |ui| {
+                            for (label, panel) in [
+                                ("Library", "library"), ("History", "history"), ("Downloads", "downloads"),
+                                ("Performance", "control"), ("Appearance", "mods"), ("Settings", "settings"),
+                            ] {
+                                if ui.button(label).clicked() { self.open_panel(panel); ui.close(); }
+                            }
+                            ui.separator();
+                            if ui.button("Toggle Calm / Cyberpunk").clicked() {
+                                self.theme = if self.theme == Theme::Calm { Theme::Cyberpunk } else { Theme::Calm };
+                                ui.close();
+                            }
+                            if ui.button("Sleep background tabs").clicked() { self.sleep_background_tabs(); ui.close(); }
+                            if ui.button("Command palette  Ctrl+K").clicked() { self.show_command_palette = true; ui.close(); }
+                        });
+                        if self.profile.navigation_protection {
+                            Frame::new()
+                                .fill(palette.good.gamma_multiply(0.12))
+                                .corner_radius(8)
+                                .inner_margin(Margin::symmetric(8, 5))
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("● PROTECTED").size(9.0).strong().monospace().color(palette.good));
+                                });
+                        }
+                    });
                 });
             });
-        });
-        ui.add_space(5.0);
+        ui.add_space(6.0);
     }
 
     fn draw_tabs(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        ui.horizontal(|ui| {
-            let mut close_index = None;
-            let mut set_pin: Option<(usize, bool)> = None;
-            let mut indices: Vec<usize> = self.tabs.iter().enumerate()
-                .filter(|(_, tab)| tab.workspace == self.active_workspace)
-                .map(|(index, _)| index).collect();
-            indices.sort_by_key(|index| !self.tabs[*index].pinned);
+        let mut close_index = None;
+        let mut set_pin: Option<(usize, bool)> = None;
+        let mut indices: Vec<usize> = self.tabs.iter().enumerate()
+            .filter(|(_, tab)| tab.workspace == self.active_workspace)
+            .map(|(index, _)| index).collect();
+        indices.sort_by_key(|index| !self.tabs[*index].pinned);
 
-            for index in indices {
-                let tab = &self.tabs[index];
-                let selected = index == self.active_tab;
-                let fill = if selected { palette.surface_raised } else { palette.background };
-                let label = format!("{}{}", if tab.pinned { "◆ " } else { "" }, tab.title.chars().take(18).collect::<String>());
-                let button = egui::Button::new(RichText::new(label).size(12.0).color(if selected { palette.text } else { palette.muted }))
-                    .fill(fill).stroke(Stroke::new(if selected { 1.0 } else { 0.0 }, palette.border))
-                    .corner_radius(if self.theme == Theme::Calm { 9 } else { 2 });
-                let response = ui.add(button);
-                if response.clicked() {
-                    self.active_tab = index;
-                    self.address = self.tabs[index].url.clone();
-                }
-                response.context_menu(|ui| {
-                    if ui.button(if tab.pinned { "Unpin tab" } else { "Pin tab" }).clicked() {
-                        set_pin = Some((index, !tab.pinned));
-                        ui.close();
+        Frame::new()
+            .fill(palette.background)
+            .corner_radius(11)
+            .inner_margin(Margin::symmetric(5, 4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for index in indices {
+                        let tab = &self.tabs[index];
+                        let selected = index == self.active_tab;
+                        let fill = if selected { palette.surface_raised } else { palette.background };
+                        let title = tab.title.chars().take(19).collect::<String>();
+                        let label = format!("{}{}", if tab.pinned { "◆ " } else { "" }, title);
+                        Frame::new()
+                            .fill(fill)
+                            .stroke(Stroke::new(if selected { 1.0 } else { 0.0 }, palette.border))
+                            .corner_radius(9)
+                            .inner_margin(Margin::symmetric(7, 4))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let response = ui.add(
+                                        egui::Button::new(RichText::new(label).size(11.5).color(if selected { palette.text } else { palette.muted }))
+                                            .fill(fill)
+                                            .stroke(Stroke::NONE)
+                                            .corner_radius(4)
+                                    );
+                                    if response.clicked() {
+                                        self.active_tab = index;
+                                        self.address = self.tabs[index].url.clone();
+                                    }
+                                    response.context_menu(|ui| {
+                                        if ui.button(if tab.pinned { "Unpin tab" } else { "Pin tab" }).clicked() {
+                                            set_pin = Some((index, !tab.pinned));
+                                            ui.close();
+                                        }
+                                        if ui.button("Close tab").clicked() {
+                                            close_index = Some(index);
+                                            ui.close();
+                                        }
+                                    });
+                                    if ui.add(egui::Button::new(RichText::new("×").size(14.0).color(if selected { palette.text } else { palette.muted }))
+                                        .fill(Color32::TRANSPARENT)
+                                        .stroke(Stroke::NONE)
+                                        .corner_radius(6))
+                                        .on_hover_text("Close tab")
+                                        .clicked()
+                                    {
+                                        close_index = Some(index);
+                                    }
+                                });
+                            });
                     }
-                    if ui.button("Close tab").clicked() {
-                        close_index = Some(index);
-                        ui.close();
+                    if ui.add_sized([30.0, 28.0], egui::Button::new(RichText::new("+").size(18.0).color(palette.accent))
+                        .fill(palette.surface_raised).corner_radius(8)).on_hover_text("New tab").clicked()
+                    {
+                        self.new_tab();
                     }
                 });
-                if ui.small_button(RichText::new("×").color(if selected { palette.text } else { palette.muted }))
-                    .on_hover_text("Close tab")
-                    .clicked()
-                {
-                    close_index = Some(index);
-                }
-            }
-            if let Some((index, pinned)) = set_pin { self.tabs[index].pinned = pinned; }
-            if let Some(index) = close_index { self.close_tab(index); }
-            if ui.add(egui::Button::new(RichText::new("＋").size(18.0).color(palette.accent)).fill(palette.surface).corner_radius(9)).clicked() {
-                self.new_tab();
-            }
-        });
+            });
+
+        if let Some((index, pinned)) = set_pin {
+            if let Some(tab) = self.tabs.get_mut(index) { tab.pinned = pinned; }
+        }
+        if let Some(index) = close_index { self.close_tab(index); }
+        ui.add_space(5.0);
     }
 
     fn draw_toolbar(&mut self, ui: &mut egui::Ui, palette: Palette, ctx: egui::Context) {
-        ui.horizontal(|ui| {
-            let can_back = self.active().history_index > 0;
-            if ui.add_enabled(can_back, egui::Button::new("‹").fill(palette.surface).corner_radius(9)).clicked() {
-                let tab = self.active_mut();
-                tab.history_index = tab.history_index.saturating_sub(1);
-                let target = tab.history[tab.history_index].clone();
-                self.navigate(&target, ctx.clone(), false);
-            }
-            let can_forward = self.active().history_index + 1 < self.active().history.len();
-            if ui.add_enabled(can_forward, egui::Button::new("›").fill(palette.surface).corner_radius(9)).clicked() {
-                let tab = self.active_mut();
-                tab.history_index = (tab.history_index + 1).min(tab.history.len() - 1);
-                let target = tab.history[tab.history_index].clone();
-                self.navigate(&target, ctx.clone(), false);
-            }
-            if ui.add(egui::Button::new("↻").fill(palette.surface).corner_radius(9)).clicked() {
-                let target = self.active().url.clone();
-                self.navigate(&target, ctx.clone(), false);
-            }
-            let focus_address = ui.input(|i| i.key_pressed(egui::Key::L) && i.modifiers.ctrl);
-            let address_width = (ui.available_width() - 158.0).max(120.0);
-            let address = ui.add_sized([address_width, 36.0],
-                TextEdit::singleline(&mut self.address)
-                    .id(egui::Id::new("lucid-address-bar"))
-                    .hint_text("Search or enter an address")
-                    .desired_width(f32::INFINITY)
-                    .margin(Vec2::new(12.0, 8.0)));
-            if focus_address { address.request_focus(); }
+        Frame::new()
+            .fill(palette.surface)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(13)
+            .inner_margin(Margin::symmetric(8, 7))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let icon_button = |ui: &mut egui::Ui, glyph: &str, enabled: bool, tip: &str| {
+                        ui.add_enabled(enabled,
+                            egui::Button::new(RichText::new(glyph).size(17.0).color(palette.text))
+                                .fill(palette.surface_raised)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(9)
+                        ).on_hover_text(tip)
+                    };
 
-            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let go_clicked = ui.add_sized([44.0, 36.0],
-                egui::Button::new(RichText::new("Go").color(palette.text))
-                    .fill(palette.surface_raised)
-                    .corner_radius(9))
-                .on_hover_text("Open address or search")
-                .clicked();
-            if go_clicked || (enter_pressed && (address.has_focus() || address.lost_focus())) {
-                let target = self.address.trim().to_owned();
-                if !target.is_empty() {
-                    self.navigate(&target, ctx.clone(), true);
-                }
-            }
-            let bookmarked = self.profile.is_bookmarked(&self.active().url);
-            if ui.add(egui::Button::new(RichText::new(if bookmarked { "★" } else { "☆" }).color(palette.accent))
-                .fill(palette.surface).corner_radius(9)).on_hover_text("Save to Library").clicked() {
-                self.toggle_current_bookmark();
-            }
-            ui.menu_button(RichText::new("＋").color(palette.muted), |ui| {
-                if ui.button("New tab").clicked() { self.new_tab(); ui.close(); }
-                if ui.button("Find on page  Ctrl+F").clicked() { self.show_find = true; self.find_focus = true; ui.close(); }
-                if ui.button("Open Library").clicked() { self.open_panel("library"); ui.close(); }
-                if ui.button("Open Home").clicked() { self.navigate("lucid://home", ctx.clone(), true); ui.close(); }
+                    let can_back = self.active().history_index > 0;
+                    if icon_button(ui, "‹", can_back, "Back").clicked() {
+                        let tab = self.active_mut();
+                        tab.history_index = tab.history_index.saturating_sub(1);
+                        let target = tab.history[tab.history_index].clone();
+                        self.navigate(&target, ctx.clone(), false);
+                    }
+                    let can_forward = self.active().history_index + 1 < self.active().history.len();
+                    if icon_button(ui, "›", can_forward, "Forward").clicked() {
+                        let tab = self.active_mut();
+                        tab.history_index = (tab.history_index + 1).min(tab.history.len() - 1);
+                        let target = tab.history[tab.history_index].clone();
+                        self.navigate(&target, ctx.clone(), false);
+                    }
+                    if icon_button(ui, "↻", true, "Reload").clicked() {
+                        let target = self.active().url.clone();
+                        self.navigate(&target, ctx.clone(), false);
+                    }
+                    if icon_button(ui, "⌂", true, "Home").clicked() {
+                        self.navigate("lucid://home", ctx.clone(), true);
+                    }
+
+                    ui.add_space(3.0);
+                    let focus_address = self.address_focus_requested
+                        || ui.input(|i| i.key_pressed(egui::Key::L) && i.modifiers.ctrl);
+                    self.address_focus_requested = false;
+                    let address_width = (ui.available_width() - 142.0).max(180.0);
+                    Frame::new()
+                        .fill(palette.background)
+                        .stroke(Stroke::new(1.0, palette.border))
+                        .corner_radius(10)
+                        .inner_margin(Margin::symmetric(9, 2))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let secure = self.active().url.starts_with("https://");
+                                ui.label(RichText::new(if secure { "◈" } else { "⌕" })
+                                    .size(15.0)
+                                    .color(if secure { palette.good } else { palette.muted }));
+                                let address = ui.add_sized([address_width, 32.0],
+                                    TextEdit::singleline(&mut self.address)
+                                        .id(egui::Id::new("lucid-address-bar"))
+                                        .hint_text("Search or enter a website")
+                                        .desired_width(f32::INFINITY)
+                                        .margin(Vec2::new(6.0, 6.0))
+                                        .frame(false));
+                                if focus_address { address.request_focus(); }
+                                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                let go_clicked = ui.add_sized([38.0, 28.0],
+                                    egui::Button::new(RichText::new("↵").size(15.0).strong().color(palette.text))
+                                        .fill(palette.surface_raised)
+                                        .stroke(Stroke::NONE)
+                                        .corner_radius(7))
+                                    .on_hover_text("Go to address")
+                                    .clicked();
+                                if go_clicked || (enter_pressed && (address.has_focus() || address.lost_focus())) {
+                                    let target = self.address.trim().to_owned();
+                                    if !target.is_empty() {
+                                        self.navigate(&target, ctx.clone(), true);
+                                    }
+                                }
+                            });
+                        });
+
+                    let bookmarked = self.profile.is_bookmarked(&self.active().url);
+                    if icon_button(ui, if bookmarked { "★" } else { "☆" }, true, "Save to Library").clicked() {
+                        self.toggle_current_bookmark();
+                    }
+                    ui.menu_button(RichText::new("•••").size(15.0).color(palette.muted), |ui| {
+                        if ui.button("Find on page   Ctrl+F").clicked() {
+                            self.show_find = true;
+                            self.find_focus = true;
+                            ui.close();
+                        }
+                        if ui.button("New tab   Ctrl+T").clicked() { self.new_tab(); ui.close(); }
+                        if ui.button("Open Library").clicked() { self.open_panel("library"); ui.close(); }
+                        if ui.button("Open Home").clicked() { self.navigate("lucid://home", ctx.clone(), true); ui.close(); }
+                    });
+                });
             });
-        });
     }
 
     fn draw_home(&mut self, ui: &mut egui::Ui, palette: Palette, ctx: egui::Context) {
@@ -785,7 +905,7 @@ impl LucidApp {
                 TextEdit::singleline(&mut self.address)
                     .hint_text("Search the web or enter a website")
                     .margin(Vec2::new(16.0, 12.0)));
-            if search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if (search.has_focus() || search.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 self.navigate(&self.address.clone(), ctx.clone(), true);
             }
             ui.add_space(15.0);
@@ -801,19 +921,7 @@ impl LucidApp {
             });
             ui.add_space(24.0);
             ui.label(RichText::new("Try the engine preview:  lucid://demo").size(11.0).color(palette.muted));
-            ui.add_space(18.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Workspace").size(10.0).color(palette.muted));
-                egui::ComboBox::from_id_salt("lucid-workspace")
-                    .selected_text(&self.active_workspace)
-                    .show_ui(ui, |ui| {
-                        for workspace in self.profile.workspaces.clone() {
-                            if ui.selectable_label(self.active_workspace == workspace, &workspace).clicked() {
-                                self.switch_workspace(&workspace);
-                            }
-                        }
-                    });
-            });
+
         });
     }
 
@@ -840,7 +948,7 @@ impl LucidApp {
             });
             ui.add_space(8.0);
             let response = ui.add_sized([ui.available_width() - 80.0, 40.0], TextEdit::singleline(&mut self.address).hint_text("Enter destination or search the net...").margin(Vec2::new(12.0, 10.0)));
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) { self.navigate(&self.address.clone(), ctx.clone(), true); }
+            if (response.has_focus() || response.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) { self.navigate(&self.address.clone(), ctx.clone(), true); }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.add(egui::Button::new(RichText::new("CONNECT  ↗").strong().monospace().color(palette.text)).fill(palette.accent).corner_radius(3)).clicked() { self.navigate(&self.address.clone(), ctx.clone(), true); }
             });
@@ -1274,6 +1382,7 @@ impl eframe::App for LucidApp {
                 });
             }
         });
+        if ctx.input(|i| i.key_pressed(egui::Key::L) && i.modifiers.ctrl) { self.address_focus_requested = true; }
         if ctx.input(|i| i.key_pressed(egui::Key::K) && i.modifiers.ctrl) { self.show_command_palette = true; }
         if ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.ctrl) && (self.active().page.is_some() || is_web_url(&self.active().url)) { self.show_find = true; self.find_focus = true; }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.show_find { self.show_find = false; self.find_query.clear(); }

@@ -70,6 +70,40 @@ wrap_client! {
         fn request_handler(&self) -> Option<RequestHandler> {
             Some(LucidRequestHandler::new(self.callbacks.adblocker.clone()))
         }
+
+        fn keyboard_handler(&self) -> Option<KeyboardHandler> {
+            Some(LucidKeyboardHandler::new(self.callbacks.clone()))
+        }
+    }
+}
+
+wrap_keyboard_handler! {
+    pub struct LucidKeyboardHandler {
+        callbacks: CefCallbacks,
+    }
+
+    impl KeyboardHandler {
+        fn on_pre_key_event(
+            &self,
+            _browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: Option<&mut windows_sys::Win32::UI::WindowsAndMessaging::MSG>,
+            _is_keyboard_shortcut: Option<&mut i32>,
+        ) -> i32 {
+            let Some(event) = event else { return 0; };
+            let control_pressed = event.modifiers & 4 != 0;
+            let address_shortcut = event.type_ == KeyEventType::RAWKEYDOWN
+                && event.windows_key_code == 0x4C
+                && control_pressed;
+
+            if address_shortcut {
+                let _ = self.callbacks.sender.send(BrowserEvent::FocusAddressBar);
+                self.callbacks.context.request_repaint();
+                return 1;
+            }
+
+            0
+        }
     }
 }
 
