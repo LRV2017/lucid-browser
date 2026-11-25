@@ -87,7 +87,7 @@ wrap_keyboard_handler! {
             &self,
             _browser: Option<&mut Browser>,
             event: Option<&KeyEvent>,
-            _os_event: Option<&mut windows_sys::Win32::UI::WindowsAndMessaging::MSG>,
+            _os_event: Option<&mut cef::sys::tagMSG>,
             _is_keyboard_shortcut: Option<&mut i32>,
         ) -> i32 {
             let Some(event) = event else { return 0; };

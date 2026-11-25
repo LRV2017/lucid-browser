@@ -566,7 +566,8 @@ impl LucidApp {
                     self.address_focus_requested = true;
                     #[cfg(target_os = "windows")]
                     if let Some(parent_hwnd) = self.parent_hwnd {
-                        use windows_sys::Win32::UI::WindowsAndMessaging::{SetFocus, SetForegroundWindow};
+                        use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+                        use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
                         unsafe {
                             SetForegroundWindow(parent_hwnd as _);
                             SetFocus(parent_hwnd as _);
@@ -852,7 +853,7 @@ impl LucidApp {
                                         .hint_text("Search or enter a website")
                                         .desired_width(f32::INFINITY)
                                         .margin(Vec2::new(6.0, 6.0))
-                                        .frame(false));
+                                        .frame(Frame::NONE));
                                 if focus_address { address.request_focus(); }
                                 let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                                 let go_clicked = ui.add_sized([38.0, 28.0],
