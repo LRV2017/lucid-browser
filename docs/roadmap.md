@@ -1,52 +1,81 @@
-# Lucid Browser Roadmap
+# Lucid Browser Engineering Roadmap
 
-This roadmap is an engineering sequence with release gates, not a delivery-date promise or a claim of browser parity. Lucid is intentionally building its own renderer; it will not quietly fall back to WebView2.
+This is the dependency-ordered implementation plan for Lucid's long-term browser-engine and desktop-product goals. It is a multi-year program, not a delivery-date promise. The detailed feature-level acceptance backlog is in [Web Platform and Browser Engine Specification](WEB_PLATFORM_SPEC.md).
 
-## 0.0.5 — Native rendering foundation
-- [x] Remove Wry/WebView2 from the application.
-- [x] Use Lucid's own HTTP(S) document fetch and HTML parsing path for normal navigation.
-- [x] Add bounded resource loading and linked stylesheet discovery.
-- [x] Paint Lucid layout output through the native egui surface.
-- [x] Add raster image decoding and texture painting for supported formats.
-- [x] Make page loading asynchronous and guard against stale tab responses.
-- [x] Simplify default Lucid Calm chrome and put secondary tools in a compact menu.
-- [ ] Improve HTML parser correctness and document/DOM mutation model.
-- [ ] Implement standards-based CSS parsing, cascade and computed style.
-- [ ] Add inline formatting, line boxes, flexbox, grid, positioning and scrolling.
-- [ ] Add reliable resource scheduling, cache, content-type checks and CSS asset fetching.
+## Current architecture and honest status
 
-## 0.0.6 — Fonts, graphics and layout
-- [ ] Download and decode web fonts with licensing and origin rules.
-- [ ] Font fallback, shaping, script coverage and text metrics.
-- [ ] Image intrinsic sizing, responsive srcset selection, SVG and CSS backgrounds.
-- [ ] GPU compositing, clipping, stacking contexts and retained display lists.
-- [ ] Layout/reftest suite across viewport sizes and device scale factors.
+- [x] Native Windows browser shell with tabs, workspaces, address/search navigation and Lucid visual themes.
+- [x] CEF/Chromium compatibility path integrated for ordinary modern websites in the Windows build.
+- [x] Initial CEF request interception and filter-list-based network ad blocking.
+- [x] Early Lucid-owned HTML/CSS/layout/paint prototype in `crates/lucid-engine`, used for engine experimentation and the local demo path.
+- [ ] Standards-complete independent HTML/CSS/DOM/JavaScript engine.
+- [ ] Production-grade sandbox, site isolation and browser security model.
+- [ ] Broad WPT/Test262 conformance and independent security review.
 
-## 0.0.7 — JavaScript and the DOM platform
-- [ ] Integrate a standalone JavaScript engine.
-- [ ] Define realms, execution contexts, event loop, jobs and microtasks.
-- [ ] Expose a secure DOM host API with mutation, events and observers.
-- [ ] Add timers, promises, fetch, URL, storage and structured clone APIs.
-- [ ] Add workers and WebAssembly incrementally.
-- [ ] Use ECMAScript Test262 and Web Platform Tests to measure compatibility.
+CEF supplies Chromium web-platform behavior today; it is not the same thing as implementing those standards inside `lucid-engine`. The independent renderer remains experimental. Keep that distinction visible in product copy, settings and release notes.
 
-## 0.0.8 — Media and browser APIs
-- [ ] Audio/video demux, decoding, rendering and playback controls.
-- [ ] WebAudio, MediaSource and media-session foundations.
-- [ ] Iframes and embedded browsing contexts.
-- [ ] Cookies, local/session storage, IndexedDB and service workers.
-- [ ] WebSocket and WebRTC APIs.
-- [ ] Accessibility tree and assistive-technology support.
+## Phase 1 — Foundation and architecture
+- [ ] Make subsystem ownership and CEF-to-Lucid migration boundaries explicit.
+- [ ] Establish feature-status tracking, WPT/Test262 harnesses and reproducible CI reports.
+- [ ] Add parser/layout fuzzing, resource limits, memory budgets and a threat model.
+- [ ] Define origin, browsing-context, process, IPC and permission abstractions before API expansion.
 
-## 0.0.9 — Security, privacy and ecosystem
-- [ ] HTTP cache, connection pooling, HTTP/2 and HTTP/3.
-- [ ] Origin model, CSP, CORS, mixed-content and certificate behavior.
-- [ ] Resource-level ad/tracker blocking with filter-list parsing.
-- [ ] Permission manager, safe downloads and private browsing.
-- [ ] Multi-process renderer, sandboxing, IPC validation and site isolation.
-- [ ] Sandboxed extension API, permission model and signed packages.
-- [ ] Fuzzing, dependency review and external security review.
+## Phase 2 — HTML and DOM
+- [ ] WHATWG tokenizer/tree builder, insertion modes, adoption agency, foster parenting and malformed HTML recovery.
+- [ ] SVG/MathML namespaces, templates, parser lifecycle and streaming.
+- [ ] Core DOM/Web IDL, mutation, traversal, events, observers and serialization.
+- [ ] Forms, validation, submission encoding, dialogs, iframes, postMessage and Shadow DOM.
+- [ ] Continuous HTML/DOM WPT coverage.
 
-## 1.0 — Release gates
+## Phase 3 — CSS, fonts and layout
+- [ ] CSS Syntax parser, selectors, cascade, layers, custom properties and computed values.
+- [ ] Media/supports/container rules, modern units/colors, animations and font-face.
+- [ ] Font fallback, HarfBuzz shaping, Unicode line breaking and bidirectional text.
+- [ ] Block/inline, flexbox, grid, tables, floats, columns, positioning, stacking and scrolling.
+- [ ] Visual reftests and differential rendering.
 
-No 1.0 release until broad web standards conformance, representative modern-site compatibility, JavaScript and media support, accessibility, site isolation, crash recovery, secure update infrastructure, reproducible benchmarks and a vulnerability response process have been demonstrated.
+## Phase 4 — JavaScript and core Web APIs
+- [ ] Select and integrate a maintained JS VM with a documented update/security plan.
+- [ ] Realms, event loop, tasks, microtasks, promises, timers and animation callbacks.
+- [ ] DOM/Web IDL host bindings and core APIs: URL, fetch, XHR, streams and structured clone.
+- [ ] Workers, WebAssembly and cross-origin-isolated SharedArrayBuffer/Atomics.
+- [ ] Test262 and JavaScript/Web API WPT coverage.
+
+## Phase 5 — Networking and storage
+- [ ] HTTP/1.1, HTTP/2, HTTP/3, TLS, DNS-over-HTTPS, proxies and content decoding.
+- [ ] HTTP cache, ETag/Cache-Control revalidation, HSTS and Alt-Svc.
+- [ ] Cookie jar, SameSite/Partitioned cookies, origin storage and quota model.
+- [ ] IndexedDB, Cache API, OPFS and service-worker lifecycle.
+- [ ] SOP, CORS, CSP, COOP/COEP/CORP, Permissions-Policy and mixed-content enforcement.
+
+## Phase 6 — Graphics and media
+- [ ] Retained display lists, invalidation, tiled rasterization and GPU compositing.
+- [ ] SVG, Canvas 2D, CSS effects, WebGL and WebGPU.
+- [ ] AVIF/JPEG XL and animated image support; responsive images and font formats.
+- [ ] Audio/video decode, WebAudio, WebCodecs, MSE and PiP.
+- [ ] EME/Widevine only if licensed and supported; no assumption of DRM availability.
+
+## Phase 7 — Security and process isolation
+- [ ] Browser, renderer, network, GPU and utility process boundaries.
+- [ ] Typed IPC, shared-memory frame transport and crash containment.
+- [ ] Windows AppContainer/restricted-token/Job Object and applicable mitigation policies.
+- [ ] Site isolation, permission controls, safe downloads and phishing/malware protection.
+- [ ] Fuzzing, dependency review and independent security assessment.
+
+## Phase 8 — DevTools and ecosystem
+- [ ] Elements, console, source debugger, network, performance, memory and storage tools.
+- [ ] WebExtensions/Manifest V3 runtime and package/permission management.
+- [ ] DPAPI/Credential Manager password storage, autofill and WebAuthn/passkeys.
+- [ ] UI Automation accessibility, screen-reader support, IME/TSF, spellcheck and find markers.
+- [ ] PDFium, printing, Save as PDF, crash restore, private profiles and background updates.
+
+## Phase 9 — Compatibility and release
+- [ ] Broad WPT, Test262, WebGL/WebGPU and media conformance results.
+- [ ] Differential visual tests and representative top-site compatibility matrix.
+- [ ] Performance budgets for startup, navigation, script, layout, paint, memory and scrolling.
+- [ ] Security audit, signed update infrastructure, crash recovery and vulnerability response.
+- [ ] Only then evaluate retiring CEF for general browsing in favor of the Lucid-owned engine.
+
+## Release rule
+
+No capability is marked complete until implementation, tests, security behavior and platform coverage are documented. A successful compile or a working demo page is not evidence of standards compliance or browser parity.

@@ -2,73 +2,66 @@
 
 ## Product boundaries
 
-- `apps/lucid-browser`: native eframe/egui desktop shell, tabs, workspaces, profile, address handling, bookmarks, history, downloads and browser controls.
-- `crates/lucid-engine`: Lucid-owned document parsing, CSS subset, resource loading, layout and paint operation generation.
-- There is no Wry/WebView2 dependency or embedded external browser surface in the current application.
+- `apps/lucid-browser`: native eframe/egui desktop shell, tabs, workspaces, address handling, profile, bookmarks, history, downloads, browser controls and current CEF integration.
+- `apps/lucid-browser/src/cef_host.rs`: Windows CEF host, browser client callbacks, keyboard bridge and request interception.
+- `crates/lucid-engine`: Lucid-owned experimental HTML parsing, DOM data structures, CSS subset, resource loading, layout and paint operation generation.
+- CEF currently supplies Chromium web-platform behavior for ordinary websites in the Windows build. It is not WebView2 and must not be represented as code implemented by `lucid-engine`.
 
-## Native page lifecycle
+## Current navigation/rendering paths
+
+Ordinary website path:
 
 ```text
-Address bar / navigation
-       |
-       v
-HTTP(S) document fetch (reqwest + rustls)
-       |
-       v
-Lucid HTML tokenizer and document tree
-       |
-       +----> inline style collection
-       |
-       +----> linked resource discovery
-                    |
-                    v
-              HTTP(S) resource loader
-                    |
-          +---------+----------+
-          |                    |
-       CSS files           raster images
-          |                    |
-          v                    v
-     CSS subset parser     image decoder
-          |                    |
-          +---------+----------+
-                    |
-                    v
-           style and layout
-                    |
-                    v
-            paint operations
-                    |
-                    v
-          egui text/shape/image painter
+Lucid address bar and tab shell
+          |
+          v
+Native browser process / CEF host
+          |
+          v
+Bundled Chromium Embedded Framework
+          |
+          +--> Chromium HTML / DOM / CSS / JavaScript / networking / media
+          |
+          v
+Native child browser surface inside Lucid window
 ```
 
-Page requests execute on background threads. A tab ID and navigation-generation value prevent an older response from overwriting a newer navigation in the same tab. Image bytes are decoded away from the UI thread; the UI thread uploads RGBA data as egui textures and retains those textures by tab and source URL.
+Independent engine experimentation path:
 
-## Current implementation scope
+```text
+Lucid demo / engine test input
+          |
+          v
+Lucid resource loader
+          |
+          v
+Lucid HTML parser and early document tree
+          |
+          v
+Limited CSS parser and cascade
+          |
+          v
+Early block layout and paint operations
+          |
+          v
+egui text / shape / image painter
+```
 
-### HTML and document tree
+The CEF path provides broad compatibility through Chromium, subject to the bundled CEF version, build configuration and platform support. The Lucid path is deliberately separate and experimental. Do not infer that a feature supported by CEF is already implemented in the Lucid engine.
 
-The independent parser recognizes a useful subset of tags, attributes, comments and raw text. It is not the WHATWG/HTML Living Standard parser and does not implement complete malformed-markup recovery, namespaces, templates or the complete DOM API. Script bodies are stored as inert text.
+## Lucid engine current scope
 
-### CSS
+- HTML tokenizer/parser prototype and simple document node model.
+- Limited style parsing/cascade and basic layout/paint structures.
+- Bounded resource loading and selected raster image decoding in the experimental rendering path.
+- No standards-complete HTML tree builder, DOM/Web IDL, CSSOM, JavaScript runtime, full CSS layout, Web APIs, browser storage or production media pipeline.
 
-Inline style blocks and linked stylesheets pass through a small Lucid CSS parser. Selectors and declarations are restricted to a small subset, and layout is primarily top-to-bottom block flow. CSSOM, custom properties, full specificity/cascade rules, pseudo-classes, flexbox, grid, intrinsic sizing, positioning, stacking contexts and standards-level line layout are not complete.
+## Target architecture
 
-### Images and resources
-
-The resource loader resolves relative HTTP(S) URLs, applies timeouts/redirect limits and enforces a per-resource byte cap. The app decodes selected raster image formats and paints them through egui textures. This does not yet cover SVG, CSS background images, responsive image selection, animation timing or video/audio streams. Resource discovery is not yet a complete browser fetch algorithm.
-
-## Not implemented yet
-
-- JavaScript execution, realms, event loop, DOM host bindings or Web APIs.
-- Fonts, shaping, fallback, SVG, canvas, iframe and embedded browsing contexts.
-- Audio/video codecs, streaming, media sessions and playback.
-- Cookies, local/session storage, IndexedDB, service workers, WebSocket and WebRTC.
-- Complete HTML/CSS compatibility and broad Web Platform Tests coverage.
-- Multi-process rendering, sandboxing, origin isolation and a browser-grade security model.
-- Accessibility tree, extension runtime and mature developer tools.
+The long-term engine target and subsystem requirements are maintained in [WEB_PLATFORM_SPEC.md](WEB_PLATFORM_SPEC.md). The planned architecture separates browser, renderer, network, GPU and utility processes, with typed IPC, shared-memory transport where appropriate, origin isolation, permission controls and Windows sandboxing. These are target requirements, not current guarantees.
 
 ## Security considerations
 
-All remote content is untrusted. The current engine runs in the browser application process and is not protected by a production-grade renderer sandbox or site isolation. URL scheme validation and bounded network resource loading are only parts of a broader security model. TLS, CSP, CORS, origin policy, mixed-content handling, downloads, permissions and hostile document parsing need dedicated verification. Do not claim Chrome/WebView2-equivalent security or compatibility.
+CEF's security properties depend on its build, sandbox bootstrap, process configuration and runtime. The independent Lucid renderer currently lacks production-grade process isolation and a complete browser security model. Do not assume that the experimental renderer has Chromium's sandbox or origin protections.
+
+Before replacing CEF, Lucid must demonstrate strict URL handling, TLS verification, Same-Origin Policy, CORS, CSP, mixed-content enforcement, secure cookies/storage, permission prompts, sandboxed renderer processes, validated IPC, safe downloads, crash containment, fuzzing and independent security review. Do not use experimental engine builds for sensitive browsing.
